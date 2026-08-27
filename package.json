@@ -1,0 +1,7 @@
+{
+  "name": "crm-consorcio",
+  "version": "2.0.0",
+  "private": true,
+  "description": "CRM de consórcio (site estático) + função serverless do Painel de Metas para TV",
+  "engines": { "node": ">=18" }
+}

@@ -1,0 +1,92 @@
+/* Painel de Metas para TV — tela cheia, alto contraste, números grandes */
+:root{
+  --bg1:#0A1A2F;
+  --bg2:#122B4A;
+  --gold:#E7B961;
+  --green:#37D07A;
+  --red:#F0655A;
+  --ink:#EAF1FA;
+  --ink-soft:#9FB4CC;
+  --card:rgba(255,255,255,.05);
+  --line:rgba(255,255,255,.12);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:radial-gradient(1200px 800px at 20% -10%, #1B3A63 0%, var(--bg1) 55%, #06101E 100%);
+  color:var(--ink);
+  font-family:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+  overflow:hidden;
+}
+#painel{height:100vh;height:100dvh;width:100vw;display:flex;flex-direction:column;padding:2.4vw 3vw;gap:2vh}
+.carregando{margin:auto;font-size:2vw;color:var(--ink-soft)}
+
+/* ---------- topo ---------- */
+.pt-top{display:flex;justify-content:space-between;align-items:baseline}
+.pt-emp{font-size:1.9vw;font-weight:800;letter-spacing:.02em}
+.pt-emp small{display:block;font-size:.9vw;font-weight:600;color:var(--gold);letter-spacing:.28em;margin-top:.3vh}
+.pt-clock{font-size:1.6vw;font-weight:700;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.pt-meta-nome{font-size:1.2vw;color:var(--ink-soft);font-weight:600}
+
+/* ---------- corpo ---------- */
+.pt-body{flex:1;display:grid;grid-template-columns:38% 62%;gap:2.5vw;min-height:0}
+
+.pt-stats{display:flex;flex-direction:column;justify-content:center;gap:2.2vh}
+.pt-stat{background:var(--card);border:1px solid var(--line);border-radius:1.4vw;padding:1.8vh 1.8vw}
+.pt-stat .lb{font-size:1.1vw;color:var(--ink-soft);font-weight:700;letter-spacing:.1em;display:flex;align-items:center;gap:.6vw}
+.pt-stat .vl{font-size:4.2vw;font-weight:900;line-height:1.05;font-variant-numeric:tabular-nums;margin-top:.4vh}
+.pt-stat.vendido .vl{color:var(--green)}
+.pt-stat.pct .vl{color:var(--gold)}
+.pt-stat.falta .vl{color:var(--ink)}
+.pt-stat.meta .vl{color:var(--ink)}
+
+/* barra de progresso */
+.pt-prog{margin-top:1vh}
+.pt-prog-track{height:1.6vh;background:rgba(255,255,255,.1);border-radius:99px;overflow:hidden}
+.pt-prog-fill{height:100%;background:linear-gradient(90deg,var(--gold),var(--green));border-radius:99px;transition:width 1s ease}
+
+/* ---------- gráfico ---------- */
+.pt-chart{background:var(--card);border:1px solid var(--line);border-radius:1.4vw;padding:2vh 1.6vw;display:flex;flex-direction:column;min-height:0}
+.pt-chart h2{font-size:1.1vw;color:var(--ink-soft);font-weight:700;letter-spacing:.1em;margin-bottom:1vh}
+.pt-chart svg{flex:1;width:100%;height:100%;overflow:visible}
+
+/* ---------- rodapé ---------- */
+.pt-foot{display:flex;gap:1.4vw;align-items:stretch}
+.pt-badge{flex:1;background:var(--card);border:1px solid var(--line);border-radius:1.2vw;padding:1.6vh 1.4vw;display:flex;flex-direction:column;justify-content:center}
+.pt-badge .lb{font-size:.95vw;color:var(--ink-soft);font-weight:700;letter-spacing:.08em}
+.pt-badge .vl{font-size:1.9vw;font-weight:800;margin-top:.3vh}
+.pt-badge.status .vl{color:var(--gold)}
+.pt-badge.status.atingida .vl,.pt-badge.status.superada .vl{color:var(--green)}
+.pt-badge.ritmo.acima .vl{color:var(--green)}
+.pt-badge.ritmo.abaixo .vl{color:var(--red)}
+
+/* ---------- botão tela cheia ---------- */
+#fs-btn{position:fixed;top:1.2vw;right:1.2vw;z-index:20;background:rgba(255,255,255,.08);color:var(--ink);
+  border:1px solid var(--line);border-radius:.6vw;font-size:1.4vw;width:2.8vw;height:2.8vw;cursor:pointer;
+  opacity:0;transition:opacity .3s}
+body:hover #fs-btn{opacity:.5}
+#fs-btn:hover{opacity:1}
+
+/* ---------- animação nova venda ---------- */
+.nova-venda{position:fixed;top:0;left:0;right:0;z-index:30;
+  background:linear-gradient(90deg,var(--green),#1FA85C);
+  color:#052015;display:flex;align-items:center;justify-content:center;gap:2vw;
+  padding:2.2vh 0;transform:translateY(-120%);transition:transform .5s cubic-bezier(.2,.9,.3,1.2)}
+.nova-venda.show{transform:translateY(0)}
+.nv-tag{font-size:1.6vw;font-weight:900;letter-spacing:.2em}
+.nv-valor{font-size:2.6vw;font-weight:900;font-variant-numeric:tabular-nums}
+
+@keyframes pulse-green{0%{box-shadow:0 0 0 0 rgba(55,208,122,.55)}100%{box-shadow:0 0 0 4vw rgba(55,208,122,0)}}
+.pt-stat.vendido.bump{animation:pulse-green 1.2s ease-out}
+
+.pt-erro{margin:auto;text-align:center;color:var(--ink-soft);font-size:1.6vw;max-width:60vw;line-height:1.6}
+.pt-erro b{color:var(--ink);font-size:2vw;display:block;margin-bottom:1vh}
+
+/* telas menores / retrato */
+@media(max-aspect-ratio:1/1){
+  .pt-body{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+  .pt-stat .vl{font-size:8vw}
+  .pt-emp{font-size:4vw}.pt-clock{font-size:3.5vw}
+  .pt-badge .vl{font-size:4vw}
+  #fs-btn{width:9vw;height:9vw;font-size:5vw}
+}
