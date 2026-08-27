@@ -24,7 +24,7 @@
       { key: 'produtos', label: 'Produtos' },
       { key: 'funil', label: 'Funil' },
       { key: 'paineltv', label: 'Painel TV' },
-      { key: 'dados', label: 'Dados' }
+      { key: 'dados', label: 'Backup / Dados' }
     ], function (key) {
       let pane = host.querySelector('.tabpane');
       if (!pane) { pane = U.el('<div class="tabpane"></div>'); host.appendChild(pane); }
@@ -262,6 +262,37 @@
       ['usuarios', 'leads', 'indicadores', 'simulacoes', 'propostas', 'vendas', 'metas'].map(function (k) {
         return '<div class="fm-item"><div class="fm-n">' + (d[k] ? d[k].length : 0) + '</div><div class="fm-l">' + k + '</div></div>';
       }).join('') + '</div></div>'));
+
+    /* ---------- backup / exportação ---------- */
+    const BACKUP_KEY = 'crm_consorcio_v1'; // mesma chave usada em js/store.js (const KEY)
+    const backupCard = U.el('<div class="card" style="margin-top:14px"><h3 class="card-title">Backup dos dados</h3>' +
+      '<div class="muted">Backup exporta uma cópia dos dados atuais. Nenhum dado será apagado.</div></div>');
+    const exportBtn = U.el('<button class="btn primary" style="margin-top:12px">Exportar backup</button>');
+    exportBtn.onclick = function () {
+      try {
+        const raw = localStorage.getItem(BACKUP_KEY);
+        if (!raw) { alert('Não há dados salvos neste navegador para exportar.'); return; }
+        let dados;
+        try { dados = JSON.parse(raw); } catch (e) { dados = raw; } // se corrompido, preserva o texto cru
+        const now = new Date();
+        const p = function (n) { return String(n).padStart(2, '0'); };
+        const stamp = now.getFullYear() + '-' + p(now.getMonth() + 1) + '-' + p(now.getDate()) + '-' + p(now.getHours()) + p(now.getMinutes());
+        const pacote = {
+          tipo: 'crm-backup',
+          app: 'CRM Consórcio — LFT',
+          chave: BACKUP_KEY,
+          exportadoEm: now.toISOString(),
+          dados: dados
+        };
+        U.downloadBlob('crm-backup-' + stamp + '.json', 'application/json', JSON.stringify(pacote, null, 2));
+        C.toast('Backup gerado.');
+      } catch (e) {
+        console.error(e);
+        alert('Não foi possível gerar o backup: ' + (e && e.message || e));
+      }
+    };
+    backupCard.appendChild(exportBtn);
+    pane.appendChild(backupCard);
 
     const demo = U.el('<button class="btn ghost">Carregar dados de exemplo</button>');
     demo.onclick = function () { C.confirm('Adiciona leads, propostas e uma venda de exemplo para você testar. Continuar?', function () { Store.loadDemo(); C.toast('Dados de exemplo carregados.'); }); };
