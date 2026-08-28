@@ -59,7 +59,7 @@
       const vendasP = vendas.filter(function (v) { return U.inRange(v.dataVenda, r); });
       const propsP = props.filter(function (p) { return U.inRange((p.data || p.criadoEm || '').slice(0, 10), r); });
 
-      const emAtend = leads.filter(function (l) { return ['primeira_ligacao', 'reuniao_agendada', 'proposta_realizada'].indexOf(l.etapa) >= 0; }).length;
+      const emAtend = leads.filter(function (l) { return ['primeira_ligacao', 'reuniao_agendada', 'reuniao_realizada', 'proposta_realizada'].indexOf(l.etapa) >= 0; }).length;
       const novos = leads.filter(function (l) { return l.etapa === 'novo'; }).length;
       const valorVendido = vendasP.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
 

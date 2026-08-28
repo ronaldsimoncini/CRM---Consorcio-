@@ -30,6 +30,7 @@
     const lead = Store.get('leads', leadId);
     if (!lead || lead.etapa === nova || !Auth.canEdit()) return;
     if (nova === 'reuniao_agendada') return H.reuniaoForm(lead);
+    if (nova === 'reuniao_realizada') return H.reuniaoRealizadaForm(lead);
     if (nova === 'proposta_realizada') return H.propostaForm(lead);
     if (nova === 'fechamento') {
       if (lead.vendaId) { transitionEtapa(lead, nova); return; }
@@ -58,6 +59,37 @@
           Store.logHist(lead.id, 'reuniao', 'Reunião agendada para ' + U.fmtDate(fval(b, 'data')) + ' às ' + fval(b, 'hora'), Auth.currentId());
         });
         C.toast('Reunião agendada.');
+        if (after) after();
+      }
+    });
+  };
+
+  /* Reunião realizada: registra como foi a reunião. A etapa só muda ao SALVAR
+     (se o usuário cancelar, o lead permanece na etapa em que estava — mesmo
+     padrão dos demais formulários de transição do funil). A data/horário da
+     reunião NÃO são apagados: o registro é gravado dentro do próprio objeto
+     `lead.reuniao` (JSONB), reaproveitando a estrutura existente, e também no
+     histórico do lead (Store.logHist). */
+  H.reuniaoRealizadaForm = function (lead, after) {
+    const b = buildForm(
+      C.field('', '<div class="muted">Registre como foi a reunião com este lead.</div>', true) +
+      C.field('Observações da reunião', '<textarea name="obs" rows="6"></textarea>', true)
+    );
+    C.modal('Reunião realizada', b, {
+      saveLabel: 'SALVAR', cancelLabel: 'CANCELAR', onSave: function () {
+        const texto = fval(b, 'obs');
+        Store.batch(function () {
+          transitionEtapa(lead, 'reuniao_realizada');
+          const r = Object.assign(
+            { data: '', hora: '', consultorId: lead.consultorId || '', obs: '' },
+            lead.reuniao || {},
+            { realizada: true, realizadaEm: U.nowISO(), observacao: texto }
+          );
+          Store.update('leads', lead.id, { reuniao: r });
+          Store.logHist(lead.id, 'reuniao_realizada',
+            'Reunião realizada' + (texto ? ': ' + texto : '.'), Auth.currentId());
+        });
+        C.toast('Reunião registrada.');
         if (after) after();
       }
     });
@@ -401,7 +433,12 @@
     const b = leadFormBody(lead);
     b.appendChild(U.el(C.field('Próximo contato', '<input type="date" name="prox" value="' + (lead.proximoContato || '') + '">')));
     pane.appendChild(b);
-    if (lead.reuniao) pane.appendChild(U.el('<div class="muted">Reunião: ' + U.fmtDate(lead.reuniao.data) + ' às ' + U.esc(lead.reuniao.hora || '') + ' · ' + C.nomeUsuario(lead.reuniao.consultorId) + '</div>'));
+    if (lead.reuniao) {
+      pane.appendChild(U.el('<div class="muted">Reunião: ' + U.fmtDate(lead.reuniao.data) + ' às ' + U.esc(lead.reuniao.hora || '') + ' · ' + C.nomeUsuario(lead.reuniao.consultorId) + '</div>'));
+      if (lead.reuniao.realizada && lead.reuniao.observacao) {
+        pane.appendChild(U.el('<div class="muted" style="white-space:pre-wrap">Observações da reunião: ' + U.esc(lead.reuniao.observacao) + '</div>'));
+      }
+    }
     if (lead.motivoPerda) pane.appendChild(U.el('<div class="muted">Motivo (não fez): ' + U.esc(lead.motivoPerda.motivo) + '</div>'));
 
     if (Auth.canEdit()) {
@@ -512,10 +549,23 @@
     });
   }
 
+  /* Data/horário da reunião já armazenados em lead.reuniao ({ data:'AAAA-MM-DD', hora:'HH:MM', ... }).
+     Retorna "" quando não há nada; "DD/MM/AAAA às HH:MM", só a data ou só o horário conforme o que existir. */
+  function reuniaoLinha(lead) {
+    const r = lead.reuniao || {};
+    const d = r.data ? U.fmtDate(r.data) : '';
+    const h = r.hora ? String(r.hora).trim() : '';
+    const dOk = d && d !== '—';
+    if (dOk && h) return d + ' às ' + h;
+    return dOk ? d : h;
+  }
+
   /* ---------------- cartão do lead (funil) ---------------- */
   function leadCard(lead) {
+    const showReuniao = (lead.etapa === 'reuniao_agendada' || lead.etapa === 'reuniao_realizada') && reuniaoLinha(lead);
     const card = U.el('<div class="lead-card" tabindex="0">' +
       '<div class="lc-name">' + U.esc(lead.nome) + '</div>' +
+      (showReuniao ? '<div class="lc-line muted">📅 ' + U.esc(reuniaoLinha(lead)) + '</div>' : '') +
       (lead.telefone ? '<div class="lc-line">📞 ' + U.esc(U.fmtPhone(lead.telefone)) + '</div>' : '') +
       '<div class="lc-line">👤 ' + U.esc(C.nomeUsuario(lead.consultorId)) + '</div>' +
       (lead.valorCredito ? '<div class="lc-line">💰 ' + U.brlShort(lead.valorCredito) + '</div>' : '') +

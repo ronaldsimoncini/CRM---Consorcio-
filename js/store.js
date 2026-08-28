@@ -38,6 +38,7 @@ window.Store = (function () {
     { key: 'novo', label: 'NOVO' },
     { key: 'primeira_ligacao', label: 'PRIMEIRA LIGAÇÃO' },
     { key: 'reuniao_agendada', label: 'REUNIÃO AGENDADA' },
+    { key: 'reuniao_realizada', label: 'REUNIÃO REALIZADA' },
     { key: 'proposta_realizada', label: 'PROPOSTA REALIZADA' },
     { key: 'fechamento', label: 'FECHAMENTO' },
     { key: 'nao_fez', label: 'NÃO FEZ O CONSÓRCIO' }
