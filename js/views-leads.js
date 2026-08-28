@@ -280,7 +280,9 @@
       '</div>'
     ));
 
-    if (Auth.canEdit()) body.appendChild(quickActions(lead, function () { m.close(); openLeadModal(id); }));
+    if (Auth.canEdit()) body.appendChild(quickActions(lead,
+      function () { m.close(); openLeadModal(id); },   // reabrir (após ações que mantêm o lead)
+      function () { m.close(); }));                    // fechar de vez (após excluir)
 
     const tabHost = U.el('<div class="tab-host"></div>');
     body.appendChild(tabHost);
@@ -304,7 +306,7 @@
     }, 'lead');
   }
 
-  function quickActions(lead, reopen) {
+  function quickActions(lead, reopen, closeModal) {
     const wrap = U.el('<div class="quick-actions"></div>');
     const mk = function (label, fn) { const btn = U.el('<button class="qa">' + label + '</button>'); btn.onclick = fn; wrap.appendChild(btn); };
     if (lead.telefone) wrap.appendChild(U.el('<a class="qa" href="' + U.telLink(lead.telefone) + '">📞 Ligar</a>'));
@@ -315,7 +317,84 @@
     mk('↔️ Mover etapa', function () { H.moverEtapaForm(lead, reopen); });
     if (lead.etapa !== 'fechamento') mk('✅ Fechar venda', function () { H.fecharVendaForm(lead, reopen); });
     if (lead.etapa !== 'nao_fez') mk('🚫 Não realizado', function () { H.motivoForm(lead, reopen); });
+
+    const del = U.el('<button class="qa" style="color:#b3261e">🗑️ Excluir lead</button>');
+    del.onclick = function () { confirmarExclusaoLead(lead, closeModal || reopen); };
+    wrap.appendChild(del);
     return wrap;
+  }
+
+  /* ---------------- exclusão de lead (Supabase como fonte oficial) ----------------
+     Padrão do CRM p/ escrita no Supabase (ver js/store.js):
+       - leitura de leads .......... Store.all('leads') / Auth.scope(...)  (cache hidratado do Supabase)
+       - criação de leads .......... Store.insert('leads', {...})  -> upsert em public.leads (id, data jsonb)
+       - edição de leads ........... Store.update('leads', id, patch) -> upsert em public.leads
+       - sincronização ............. fila serial no Store; cache reidratado por Store.hydrate()
+       - auth/permissões ........... Auth.client() (sessão do usuário) + RLS is_agency_user(); telas gated por Auth.canEdit()
+     Exclusão segue o mesmo caminho: DELETE em public.leads pelo ID original do lead,
+     via Auth.client(), e só então o cache é ressincronizado a partir do servidor.
+
+     HISTÓRICO: historico.leadId é apenas uma referência dentro do JSONB (índice
+     idx_hist_lead em (data->>'leadId')). NÃO há chave estrangeira nem ON DELETE
+     CASCADE no schema, e nenhum código do CRM exige remover o histórico junto com
+     o lead. Por segurança, a exclusão apaga SOMENTE a linha de public.leads e
+     mantém as linhas de public.historico. */
+  function mensagemErroAmigavel(error) {
+    const raw = (error && (error.message || error.hint || error.details || error.code)) || '';
+    if (/permission|policy|rls|not authorized|denied|42501|403/i.test(raw)) return 'você não tem permissão para excluir este lead.';
+    if (/network|failed to fetch|fetch|timeout|econn|dns/i.test(raw)) return 'sem conexão com o servidor. Tente novamente.';
+    return raw ? ('detalhe técnico: ' + raw) : 'erro desconhecido ao contatar o servidor.';
+  }
+
+  function confirmarExclusaoLead(lead, afterOk) {
+    const body = U.el('<div>' +
+      '<p>Tem certeza que deseja excluir este lead?</p>' +
+      '<p>Essa ação excluirá o lead do CRM e do banco de dados e não poderá ser desfeita.</p>' +
+      '</div>');
+    C.modal('Excluir lead', body, {
+      saveLabel: 'EXCLUIR', cancelLabel: 'CANCELAR',
+      onSave: function () { executarExclusaoLead(lead, afterOk); } // fecha o "confirmar"; o resultado vem por mensagem
+    });
+  }
+
+  function executarExclusaoLead(lead, afterOk) {
+    const mode = (Store._mode ? Store._mode() : 'local');
+
+    /* Sem Supabase configurado neste ambiente: usa o caminho normal do CRM. */
+    if (mode === 'local') {
+      Store.remove('leads', lead.id);
+      C.toast('Lead excluído.');
+      if (afterOk) afterOk();
+      return;
+    }
+
+    /* Supabase configurado, porém sessão/carregamento não OK: não exclui nada. */
+    if (mode !== 'cloud') {
+      C.toast('Sem conexão confirmada com o servidor. O lead não foi excluído. Tente novamente em instantes.');
+      return;
+    }
+
+    const c = (window.Auth && typeof Auth.client === 'function') ? Auth.client() : null;
+    if (!c) { C.toast('Não foi possível falar com o servidor. O lead não foi excluído.'); return; }
+
+    /* DELETE real em public.leads pelo ID original — Supabase é a fonte oficial. */
+    c.from('leads').delete().eq('id', lead.id).then(function (res) {
+      if (res && res.error) {
+        console.error('Erro ao excluir lead no Supabase:', res.error);
+        C.toast('Não foi possível excluir o lead — ' + mensagemErroAmigavel(res.error));
+        return; // lead permanece na lista e no cache
+      }
+      /* Sucesso no servidor -> agora sim tira do cache pelo mesmo caminho que o
+         CRM já usa para excluir (Store.remove): a lista, os contadores e os
+         filtros se atualizam sozinhos, sem recarregar a página. O DELETE que o
+         Store enfileira é idempotente (a linha já não existe = sem efeito). */
+      if (afterOk) afterOk();
+      Store.remove('leads', lead.id);
+      C.toast('Lead excluído com sucesso.');
+    }, function (err) {
+      console.error('Falha de rede ao excluir lead:', err);
+      C.toast('Não foi possível excluir o lead — ' + mensagemErroAmigavel(err));
+    });
   }
 
   function dadosTab(pane, lead, reopen) {
