@@ -267,7 +267,7 @@
     const BACKUP_KEY = 'crm_consorcio_v1'; // mesma chave usada em js/store.js (const KEY)
     const backupCard = U.el('<div class="card" style="margin-top:14px"><h3 class="card-title">Backup dos dados</h3>' +
       '<div class="muted">Backup exporta uma cópia dos dados atuais. Nenhum dado será apagado.</div></div>');
-    const exportBtn = U.el('<button class="btn primary" style="margin-top:12px">Exportar backup</button>');
+    const exportBtn = U.el('<button class="btn primary">Exportar backup</button>');
     exportBtn.onclick = function () {
       try {
         const raw = localStorage.getItem(BACKUP_KEY);
@@ -291,7 +291,50 @@
         alert('Não foi possível gerar o backup: ' + (e && e.message || e));
       }
     };
-    backupCard.appendChild(exportBtn);
+    /* ---------- importar backup ---------- */
+    const importBtn = U.el('<button class="btn ghost">Importar backup</button>');
+    const fileInput = U.el('<input type="file" accept="application/json,.json" style="display:none">');
+    importBtn.onclick = function () { fileInput.value = ''; fileInput.click(); };
+
+    fileInput.onchange = function () {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+
+      const processar = function (texto) {
+        let pacote;
+        try { pacote = JSON.parse(texto); } catch (e) { alert('Arquivo de backup inválido.'); return; }
+
+        const valido = pacote && typeof pacote === 'object' &&
+          pacote.tipo === 'crm-backup' &&
+          pacote.chave === BACKUP_KEY &&
+          pacote.dados && typeof pacote.dados === 'object' && !Array.isArray(pacote.dados);
+        if (!valido) { alert('Arquivo de backup inválido.'); return; }
+
+        C.confirm('Este backup substituirá os dados atuais deste navegador. Deseja continuar?', function () {
+          try {
+            localStorage.setItem(BACKUP_KEY, JSON.stringify(pacote.dados));
+          } catch (e) {
+            alert('Não foi possível salvar o backup: ' + (e && e.message || e));
+            return;
+          }
+          alert('Backup importado com sucesso. O CRM será recarregado.');
+          location.reload();
+        });
+      };
+
+      if (typeof file.text === 'function') {
+        file.text().then(processar, function () { alert('Arquivo de backup inválido.'); });
+      } else {
+        const fr = new FileReader();
+        fr.onload = function () { processar(String(fr.result)); };
+        fr.onerror = function () { alert('Arquivo de backup inválido.'); };
+        fr.readAsText(file);
+      }
+    };
+
+    const backupBtns = U.el('<div class="filters" style="margin-top:12px"></div>');
+    backupBtns.append(exportBtn, importBtn, fileInput);
+    backupCard.appendChild(backupBtns);
     pane.appendChild(backupCard);
 
     const demo = U.el('<button class="btn ghost">Carregar dados de exemplo</button>');
