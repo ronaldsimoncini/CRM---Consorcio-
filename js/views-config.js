@@ -3,6 +3,23 @@
   function fval(b, n) { const e = b.querySelector('[name="' + n + '"]'); return e ? String(e.value).trim() : ''; }
   function buildForm(html) { return U.el('<div class="form-grid">' + html + '</div>'); }
 
+  /* Retorno do OAuth do Google Calendar: mostra um toast e limpa o ?gcal da URL. */
+  (function () {
+    try {
+      const p = new URLSearchParams(location.search);
+      const g = p.get('gcal');
+      if (g === 'connected' || g === 'error') {
+        const txt = g === 'connected'
+          ? 'Google Calendar conectado com sucesso.'
+          : 'Não foi possível conectar o Google Calendar. Tente de novo.';
+        setTimeout(function () { if (window.C && C.toast) C.toast(txt); }, 800);
+        p.delete('gcal');
+        const qs = p.toString();
+        history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      }
+    } catch (e) { /* ignora */ }
+  })();
+
   const NIVEIS = [
     { value: 'admin', label: 'Administrador (acesso total)' },
     { value: 'gestor', label: 'Gestor (somente visualização)' },
@@ -24,12 +41,13 @@
       { key: 'produtos', label: 'Produtos' },
       { key: 'funil', label: 'Funil' },
       { key: 'paineltv', label: 'Painel TV' },
+      { key: 'gcal', label: 'Google Calendar' },
       { key: 'dados', label: 'Backup / Dados' }
     ], function (key) {
       let pane = host.querySelector('.tabpane');
       if (!pane) { pane = U.el('<div class="tabpane"></div>'); host.appendChild(pane); }
       pane.innerHTML = '';
-      ({ empresa: empresaTab, users: usersTab, origens: origensTab, admins: adminsTab, produtos: produtosTab, funil: funilTab, paineltv: painelTvTab, dados: dadosTab }[key])(pane);
+      ({ empresa: empresaTab, users: usersTab, origens: origensTab, admins: adminsTab, produtos: produtosTab, funil: funilTab, paineltv: painelTvTab, gcal: gcalTab, dados: dadosTab }[key])(pane);
     }, 'cfg');
   };
 
@@ -317,6 +335,24 @@
     pane.appendChild(U.el('<div class="card"><h3 class="card-title">Etapas do funil</h3><ol class="rank-list">' +
       Store.etapas().map(function (e) { return '<li><span>' + e.label + '</span><b>' + e.key + '</b></li>'; }).join('') +
       '</ol><div class="muted">As etapas são fixas nesta versão para manter a integridade dos dados. Renomeação/personalização pode ser adicionada depois.</div></div>'));
+  }
+
+  /* ---------- Google Calendar (Fase 1: só o fluxo OAuth) ---------- */
+  function gcalTab(pane) {
+    const card = U.el('<div class="card"><h3 class="card-title">Google Calendar</h3>' +
+      '<div class="muted">Conecte a sua conta Google para que as reuniões do CRM possam, futuramente, ' +
+      'aparecer no seu Google Calendar. Nesta etapa só fazemos a conexão da conta — nada é agendado ainda.</div></div>');
+    const btn = U.el('<button class="btn primary" style="margin-top:12px">Conectar minha conta Google</button>');
+    const msg = U.el('<div class="muted" style="margin-top:8px"></div>');
+    btn.onclick = async function () {
+      btn.disabled = true; msg.textContent = 'Abrindo o Google…';
+      const r = await Auth.googleCalendarConnect();
+      if (r && !r.ok) { btn.disabled = false; msg.textContent = r.msg || 'Não foi possível iniciar a conexão.'; }
+      /* em caso de sucesso o navegador já saiu para a tela de consentimento do Google */
+    };
+    card.appendChild(btn);
+    card.appendChild(msg);
+    pane.appendChild(card);
   }
 
   function dadosTab(pane) {

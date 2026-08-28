@@ -155,6 +155,36 @@ window.Auth = (function () {
     return { ok: true, data: body };
   }
 
+  /* ---------- Google Calendar: inicia o fluxo OAuth (Fase 1) ----------
+     Pega o access_token da sessão, chama GET /api/google-calendar/auth e
+     redireciona o navegador para a URL de consentimento do Google.
+     Sucesso => o navegador sai desta página. Falha => { ok:false, msg }. */
+  async function googleCalendarConnect() {
+    const c = client();
+    if (!c) return { ok: false, msg: 'Configuração da nuvem ausente.' };
+    let token = null;
+    try {
+      const s = await c.auth.getSession();
+      token = s && s.data && s.data.session && s.data.session.access_token;
+    } catch (e) { /* ignora */ }
+    if (!token) return { ok: false, msg: 'Sua sessão expirou. Entre novamente.' };
+
+    const base = (window.CRM_CONFIG && window.CRM_CONFIG.painelApiBase) || '';
+    try {
+      const res = await fetch(base + '/api/google-calendar/auth', {
+        headers: { Authorization: 'Bearer ' + token }
+      });
+      const body = await res.json().catch(function () { return {}; });
+      if (!res.ok || !body || !body.url) {
+        return { ok: false, msg: (body && body.error) || ('Erro no servidor (' + res.status + ').') };
+      }
+      window.location.assign(body.url);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, msg: 'Sem conexão com o servidor. Tente novamente.' };
+    }
+  }
+
   /* ---------- leitura de sessão / permissões (API pública síncrona preservada) ---------- */
   function user() {
     if (!currentUser || currentUser.status !== 'ativo') return null;
@@ -197,7 +227,7 @@ window.Auth = (function () {
     user: user, login: login, logout: logout, nivel: nivel,
     isAdmin: isAdmin, isGestor: isGestor, isConsultor: isConsultor,
     canSeeAll: canSeeAll, canEdit: canEdit, scope: scope, owns: owns, menu: menu,
-    currentId: currentId, adminApi: adminApi,
+    currentId: currentId, adminApi: adminApi, googleCalendarConnect: googleCalendarConnect,
     uid: function () { return currentUid; },   /* auth.uid() da sessão atual (para owner_uid) */
     /* utilitários para a próxima etapa (app.js / store.js) */
     ready: function () { return _readyPromise; },
