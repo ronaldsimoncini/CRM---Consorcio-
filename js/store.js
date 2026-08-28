@@ -51,10 +51,14 @@ window.Store = (function () {
   };
 
   /* coleções que existem como tabela no Supabase (config é tratada à parte) */
-  const COLLECTIONS = ['usuarios', 'produtos', 'indicadores', 'leads', 'simulacoes', 'propostas', 'metas', 'vendas', 'historico'];
+  const COLLECTIONS = ['usuarios', 'produtos', 'indicadores', 'leads', 'simulacoes', 'propostas', 'metas', 'vendas', 'historico', 'reunioes'];
 
   /* tabelas que ganharam a coluna owner_uid na Fase 1 (dono do registro, fora do JSONB) */
-  const OWNED = ['leads', 'simulacoes', 'propostas', 'metas', 'vendas', 'historico'];
+  const OWNED = ['leads', 'simulacoes', 'propostas', 'metas', 'vendas', 'historico', 'reunioes'];
+
+  /* coleções cuja tabela pode ainda NÃO existir no Supabase: um erro no select
+     dela não derruba o CRM — vira [] e segue (ver hydrate). */
+  const SOFT = ['reunioes'];
 
   let _batch = 0, _dirty = false;
 
@@ -76,7 +80,7 @@ window.Store = (function () {
   function blank() {
     return {
       usuarios: [], consultores: [], produtos: [], leads: [], indicadores: [],
-      simulacoes: [], propostas: [], vendas: [], metas: [], historico: [],
+      simulacoes: [], propostas: [], vendas: [], metas: [], historico: [], reunioes: [],
       config: { empresa: 'LFT Consórcios', origens: DEFAULT_ORIGENS.slice(), administradoras: DEFAULT_ADMINS.slice(), painelTokens: [] },
       _seeded: false, _v: 2
     };
@@ -134,7 +138,7 @@ window.Store = (function () {
     if (!d.config.origens || !d.config.origens.length) d.config.origens = DEFAULT_ORIGENS.slice();
     if (!d.config.administradoras || !d.config.administradoras.length) d.config.administradoras = DEFAULT_ADMINS.slice();
     if (!Array.isArray(d.config.painelTokens)) d.config.painelTokens = [];
-    ['usuarios', 'consultores', 'produtos', 'leads', 'indicadores', 'simulacoes', 'propostas', 'vendas', 'metas', 'historico']
+    ['usuarios', 'consultores', 'produtos', 'leads', 'indicadores', 'simulacoes', 'propostas', 'vendas', 'metas', 'historico', 'reunioes']
       .forEach(function (k) { if (!Array.isArray(d[k])) d[k] = []; });
     return d;
   }
@@ -246,7 +250,14 @@ window.Store = (function () {
 
       COLLECTIONS.forEach(function (k, i) {
         const res = results[i];
-        if (res.error) throw new Error(k + ': ' + res.error.message);
+        if (res.error) {
+          if (SOFT.indexOf(k) >= 0) {
+            console.warn('[Store] coleção "' + k + '" indisponível (' + res.error.message + ') — seguindo com lista vazia.');
+            fresh[k] = [];
+            return;
+          }
+          throw new Error(k + ': ' + res.error.message);
+        }
         fresh[k] = (res.data || []).map(rowToObj);
       });
 

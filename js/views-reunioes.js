@@ -1,0 +1,182 @@
+/* Reuniões — compromissos do usuário logado.
+   Base para a futura integração com o Google Calendar (owner_uid → conta
+   Google do mesmo auth_uid). Nesta fase é só a entidade dentro do CRM. */
+(function () {
+  const TIPOS = [
+    { value: 'reuniao', label: 'Reunião' },
+    { value: 'ligacao', label: 'Ligação' },
+    { value: 'visita', label: 'Visita' },
+    { value: 'retorno', label: 'Retorno' },
+    { value: 'outro', label: 'Outro' }
+  ];
+  const TIPO_LABEL = TIPOS.reduce(function (m, t) { m[t.value] = t.label; return m; }, {});
+  const STATUS_LABEL = { agendada: 'Agendada', realizada: 'Realizada', cancelada: 'Cancelada' };
+  const STATUS_CLS = { agendada: 'st-info', realizada: 'st-ok', cancelada: 'st-muted' };
+  const FILTROS = ['todas', 'hoje', 'proximas', 'realizadas', 'canceladas'];
+  const FILTRO_LABEL = { todas: 'Todas', hoje: 'Hoje', proximas: 'Próximas', realizadas: 'Realizadas', canceladas: 'Canceladas' };
+
+  function fval(b, n) { const e = b.querySelector('[name="' + n + '"]'); return e ? String(e.value).trim() : ''; }
+  function scopedReunioes() { return Auth.scope(Store.all('reunioes')); }
+  function scopedLeads() { return Auth.scope(Store.all('leads')); }
+
+  /* Responsável = owner_uid (auth_uid). Sem segunda identificação no JSONB. */
+  function nomeResponsavel(ownerUid) {
+    if (!ownerUid) return '—';
+    if (ownerUid === Auth.uid()) return 'Você';
+    const u = Store.all('usuarios').find(function (x) { return x.authUid === ownerUid; });
+    return u ? u.nome : '—';
+  }
+
+  function ordena(list) {
+    return list.slice().sort(function (a, b) {
+      const ka = (a.data || '') + ' ' + (a.horaInicio || '');
+      const kb = (b.data || '') + ' ' + (b.horaInicio || '');
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+  }
+
+  /* ---------------- formulário ---------------- */
+  function reuniaoForm(r) {
+    const isNew = !r;
+    r = r || { leadId: '', titulo: '', data: U.todayISO(), horaInicio: '09:00', horaFim: '10:00', tipo: 'reuniao', observacoes: '' };
+    const leadItems = scopedLeads().map(function (l) { return { value: l.id, label: l.nome }; });
+
+    const b = U.el('<div class="form-grid">' +
+      C.field('Lead (opcional)', '<select name="lead">' + C.opts(leadItems, r.leadId || '', { blank: '— sem lead —' }) + '</select>', true) +
+      C.field('Título', '<input name="titulo" value="' + U.esc(r.titulo || '') + '">', true) +
+      C.field('Data', '<input type="date" name="data" value="' + U.esc(r.data || '') + '">') +
+      C.field('Hora inicial', '<input type="time" name="ini" value="' + U.esc(r.horaInicio || '') + '">') +
+      C.field('Hora final', '<input type="time" name="fim" value="' + U.esc(r.horaFim || '') + '">') +
+      C.field('Tipo', '<select name="tipo">' + C.opts(TIPOS, r.tipo || 'reuniao') + '</select>') +
+      C.field('Observações', '<textarea name="obs">' + U.esc(r.observacoes || '') + '</textarea>', true) +
+      '</div>');
+    const err = U.el('<div class="login-err" style="margin:6px 0"></div>');
+    b.appendChild(err);
+
+    C.modal(isNew ? 'Nova reunião' : 'Editar reunião', b, {
+      saveLabel: isNew ? 'Criar reunião' : 'Salvar', onSave: function () {
+        err.textContent = '';
+        const titulo = fval(b, 'titulo');
+        const dataISO = fval(b, 'data');
+        const ini = fval(b, 'ini'), fim = fval(b, 'fim');
+        const leadId = fval(b, 'lead') || null;
+
+        if (!titulo) { err.textContent = 'Informe o título.'; return false; }
+        if (!dataISO || isNaN(new Date(dataISO + 'T00:00:00').getTime())) { err.textContent = 'Informe uma data válida.'; return false; }
+        if (!ini) { err.textContent = 'Informe a hora inicial.'; return false; }
+        if (!fim) { err.textContent = 'Informe a hora final.'; return false; }
+        if (fim < ini) { err.textContent = 'A hora final não pode ser antes da hora inicial.'; return false; }
+        if (leadId && !Store.get('leads', leadId)) { err.textContent = 'Selecione um lead válido.'; return false; }
+
+        const campos = {
+          leadId: leadId, titulo: titulo, data: dataISO, horaInicio: ini, horaFim: fim,
+          tipo: fval(b, 'tipo') || 'reuniao', observacoes: fval(b, 'obs'), atualizadoEm: U.nowISO()
+        };
+
+        if (isNew) {
+          /* responsável = usuário logado (owner_uid = auth.uid()). O trigger do
+             banco também garante isso; enviamos explícito para o cache ficar certo na hora. */
+          Store.insert('reunioes', Object.assign({ owner_uid: Auth.uid(), status: 'agendada' }, campos));
+          if (leadId) Store.logHist(leadId, 'reuniao',
+            'Reunião agendada: ' + titulo + ' — ' + U.fmtDate(dataISO) + ' ' + ini, Auth.currentId());
+          C.toast('Reunião criada.');
+        } else {
+          const leadAntes = r.leadId || null;
+          Store.update('reunioes', r.id, campos);
+          if (leadId && leadId !== leadAntes) Store.logHist(leadId, 'reuniao',
+            'Reunião vinculada: ' + titulo + ' — ' + U.fmtDate(dataISO) + ' ' + ini, Auth.currentId());
+          C.toast('Reunião salva.');
+        }
+      }
+    });
+  }
+
+  function marcarRealizada(r) {
+    C.confirm('Marcar a reunião "' + r.titulo + '" como realizada?', function () {
+      Store.update('reunioes', r.id, { status: 'realizada', atualizadoEm: U.nowISO() });
+      if (r.leadId) Store.logHist(r.leadId, 'reuniao_realizada', 'Reunião realizada: ' + r.titulo, Auth.currentId());
+      C.toast('Reunião marcada como realizada.');
+    });
+  }
+  function cancelarReuniao(r) {
+    C.confirm('Cancelar a reunião "' + r.titulo + '"? Ela continua na lista, como cancelada.', function () {
+      Store.update('reunioes', r.id, { status: 'cancelada', atualizadoEm: U.nowISO() });
+      if (r.leadId) Store.logHist(r.leadId, 'reuniao_cancelada', 'Reunião cancelada: ' + r.titulo, Auth.currentId());
+      C.toast('Reunião cancelada.');
+    });
+  }
+
+  /* ---------------- VIEW ---------------- */
+  Views.reunioes = function (container) {
+    const head = U.el('<div class="page-head"><h1 class="page-title">Reuniões</h1></div>');
+    if (Auth.canEdit()) {
+      const add = U.el('<button class="btn primary">+ Nova reunião</button>');
+      add.onclick = function () { reuniaoForm(null); };
+      head.appendChild(add);
+    }
+    container.appendChild(head);
+
+    let filtro = 'todas';
+    const bar = U.el('<div class="tabbar"></div>');
+    container.appendChild(bar);
+    const tableWrap = U.el('<div class="card table-wrap"></div>');
+    container.appendChild(tableWrap);
+
+    function draw() {
+      bar.innerHTML = '';
+      FILTROS.forEach(function (f) {
+        const btn = U.el('<button class="tabbtn' + (f === filtro ? ' active' : '') + '">' + FILTRO_LABEL[f] + '</button>');
+        btn.onclick = function () { filtro = f; draw(); };
+        bar.appendChild(btn);
+      });
+
+      const hoje = U.todayISO();
+      const rows = ordena(scopedReunioes().filter(function (r) {
+        if (filtro === 'hoje') return r.data === hoje;
+        if (filtro === 'proximas') return (r.data || '') >= hoje && r.status === 'agendada';
+        if (filtro === 'realizadas') return r.status === 'realizada';
+        if (filtro === 'canceladas') return r.status === 'cancelada';
+        return true;
+      }));
+
+      tableWrap.innerHTML =
+        '<table class="table"><thead><tr><th>Data</th><th>Horário</th><th>Título</th><th>Lead</th>' +
+        '<th>Tipo</th><th>Responsável</th><th>Status</th><th></th></tr></thead><tbody>' +
+        rows.map(function (r) {
+          const lead = r.leadId ? Store.get('leads', r.leadId) : null;
+          const leadCell = lead ? '<a href="#" data-lead="' + U.esc(r.leadId) + '">' + U.esc(lead.nome) + '</a>' : '—';
+          return '<tr data-id="' + U.esc(r.id) + '">' +
+            '<td>' + U.fmtDate(r.data) + '</td>' +
+            '<td>' + U.esc((r.horaInicio || '') + (r.horaFim ? '–' + r.horaFim : '')) + '</td>' +
+            '<td>' + U.esc(r.titulo || '—') + '</td>' +
+            '<td>' + leadCell + '</td>' +
+            '<td>' + U.esc(TIPO_LABEL[r.tipo] || r.tipo || '—') + '</td>' +
+            '<td>' + U.esc(nomeResponsavel(r.owner_uid)) + '</td>' +
+            '<td>' + C.chip(STATUS_LABEL[r.status] || r.status || '—', STATUS_CLS[r.status] || 'st-muted') + '</td>' +
+            '<td class="row-actions"></td></tr>';
+        }).join('') +
+        '</tbody></table>' + (rows.length ? '' : '<div class="empty">Nenhuma reunião.</div>');
+
+      tableWrap.querySelectorAll('a[data-lead]').forEach(function (a) {
+        a.onclick = function (e) { e.preventDefault(); if (Views._lead) Views._lead.openModal(a.dataset.lead); };
+      });
+      tableWrap.querySelectorAll('tr[data-id]').forEach(function (tr) {
+        if (!Auth.canEdit()) return;
+        const r = Store.get('reunioes', tr.dataset.id);
+        if (!r) return;
+        const acts = tr.querySelector('.row-actions');
+        const edit = U.el('<button class="iconbtn" title="Editar">✏️</button>');
+        edit.onclick = function () { reuniaoForm(r); };
+        acts.appendChild(edit);
+        if (r.status === 'agendada') {
+          const ok = U.el('<button class="iconbtn" title="Marcar como realizada">✅</button>');
+          ok.onclick = function () { marcarRealizada(r); };
+          const canc = U.el('<button class="iconbtn" title="Cancelar">🚫</button>');
+          canc.onclick = function () { cancelarReuniao(r); };
+          acts.append(ok, canc);
+        }
+      });
+    }
+    draw();
+  };
+})();
