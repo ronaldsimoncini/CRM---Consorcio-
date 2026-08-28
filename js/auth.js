@@ -217,7 +217,7 @@ window.Auth = (function () {
   }
 
   function menu() {
-    const base = ['dashboard', 'leads', 'funil', 'reunioes', 'simulacoes', 'propostas', 'vendas', 'metas'];
+    const base = ['dashboard', 'leads', 'funil', 'reunioes', 'calendario', 'simulacoes', 'propostas', 'vendas', 'metas'];
     if (isConsultor()) return base;
     if (isGestor()) return base.concat(['consultores', 'relatorios']);
     return base.concat(['consultores', 'relatorios', 'config']); /* admin */

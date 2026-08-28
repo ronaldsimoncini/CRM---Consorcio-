@@ -1,12 +1,12 @@
 /* Shell do CRM: login, menu lateral, topo e roteamento */
 (function () {
   const LABELS = {
-    dashboard: 'Dashboard', leads: 'Leads', funil: 'Funil', reunioes: 'Reuniões', simulacoes: 'Simulações',
+    dashboard: 'Dashboard', leads: 'Leads', funil: 'Funil', reunioes: 'Reuniões', calendario: 'Calendário', simulacoes: 'Simulações',
     propostas: 'Propostas', vendas: 'Vendas', metas: 'Metas',
     consultores: 'Consultores', relatorios: 'Relatórios', config: 'Configurações'
   };
   const ICONS = {
-    dashboard: '📊', leads: '🧑', funil: '🗂️', reunioes: '📅', simulacoes: '🧮', propostas: '📄', vendas: '💰',
+    dashboard: '📊', leads: '🧑', funil: '🗂️', reunioes: '📋', calendario: '📅', simulacoes: '🧮', propostas: '📄', vendas: '💰',
     metas: '🎯', consultores: '👥', relatorios: '📈', config: '⚙️'
   };
   let mounted = false;

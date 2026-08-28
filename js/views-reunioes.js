@@ -238,4 +238,16 @@
     }
     draw();
   };
+
+  /* Exposto para a tela Calendário (js/views-calendario.js) reaproveitar o
+     MESMO formulário e as MESMAS ações — sem duplicar regras. */
+  Views._reuniao = {
+    novo: function () { reuniaoForm(null); },
+    editar: function (r) { reuniaoForm(r); },
+    marcarRealizada: marcarRealizada,
+    cancelar: cancelarReuniao,
+    tipoLabel: function (t) { return TIPO_LABEL[t] || t || '—'; },
+    statusLabel: function (s) { return STATUS_LABEL[s] || s || '—'; },
+    statusCls: function (s) { return STATUS_CLS[s] || 'st-muted'; }
+  };
 })();
