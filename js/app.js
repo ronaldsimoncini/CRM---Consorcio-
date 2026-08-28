@@ -30,12 +30,21 @@
       '</div></div>');
 
     const email = wrap.querySelector('#email'), senha = wrap.querySelector('#senha'), err = wrap.querySelector('#err');
-    function tryLogin() {
-      const r = Auth.login(email.value, senha.value);
-      if (!r.ok) { err.textContent = r.msg; return; }
-      mounted = false;
-      location.hash = 'dashboard';
-      boot();
+    let logging = false;
+    async function tryLogin() {
+      if (logging) return;                 // evita envio duplo enquanto aguarda o Supabase
+      logging = true;
+      err.textContent = '';
+      try {
+        const r = await Auth.login(email.value, senha.value);
+        if (!r.ok) { err.textContent = r.msg; return; }
+        await Store.hydrate();          // carrega os dados do usuário ANTES de mostrar o CRM
+        mounted = false;
+        location.hash = 'dashboard';
+        boot();                         // boot() decide entre CRM e tela de erro conforme Store._mode()
+      } finally {
+        logging = false;
+      }
     }
     wrap.querySelector('#go').onclick = tryLogin;
     [email, senha].forEach(function (i) { i.addEventListener('keydown', function (e) { if (e.key === 'Enter') tryLogin(); }); });
@@ -75,10 +84,41 @@
     });
     el.querySelector('.hamb').onclick = function () { el.classList.toggle('nav-open'); };
     el.querySelector('.nav-backdrop').onclick = function () { el.classList.remove('nav-open'); };
-    el.querySelector('#logout').onclick = function () {
-      Auth.logout(); mounted = false; location.hash = ''; boot();
+    el.querySelector('#logout').onclick = async function () {
+      await Auth.logout();
+      Store.clear();                    // descarta o cache do usuário que saiu
+      mounted = false; location.hash = ''; boot();
     };
     return el;
+  }
+
+  /* ---------------- TELA DE ERRO (Supabase indisponível) ---------------- */
+  function errorScreen() {
+    const wrap = U.el('<div class="login-wrap err-screen"><div class="login-card">' +
+      '<div class="login-logo"><span class="brand-logo"><img src="logo.png" alt="LFT" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline\'"><span class="brand-fallback" style="display:none">LFT</span></span></div>' +
+      '<h1>Sem conexão com o servidor</h1>' +
+      '<p class="muted">Não foi possível carregar os dados do CRM agora. Seus dados continuam guardados no servidor — nada foi perdido. Nenhuma alteração pode ser salva enquanto isto não for resolvido.</p>' +
+      '<div class="login-err" id="err"></div>' +
+      '<button class="btn primary block" id="retry">Tentar novamente</button>' +
+      '<button class="btn ghost block" id="sair" style="margin-top:8px">Sair</button>' +
+      '</div></div>');
+
+    const retry = wrap.querySelector('#retry'), err = wrap.querySelector('#err');
+    let trying = false;
+    retry.onclick = async function () {
+      if (trying) return;
+      trying = true; retry.disabled = true; err.textContent = '';
+      try { await Store.hydrate(); }
+      catch (e) { /* Store.hydrate() já avisa o usuário */ }
+      finally { trying = false; retry.disabled = false; }
+      boot();
+    };
+    wrap.querySelector('#sair').onclick = async function () {
+      await Auth.logout();
+      Store.clear();
+      mounted = false; location.hash = ''; boot();
+    };
+    return wrap;
   }
 
   function renderRoute() {
@@ -103,8 +143,18 @@
   function boot() {
     const app = document.getElementById('app');
     if (!Auth.user()) {
-      app.innerHTML = '';
-      app.appendChild(loginScreen());
+      if (!app.querySelector('#go')) {   // não recria a tela de login já visível (evita perder foco/erro)
+        app.innerHTML = '';
+        app.appendChild(loginScreen());
+      }
+      mounted = false;
+      return;
+    }
+    if (Store._mode && Store._mode() === 'error') {   // Supabase indisponível: não fingir que o CRM está normal
+      if (!app.querySelector('.err-screen')) {
+        app.innerHTML = '';
+        app.appendChild(errorScreen());
+      }
       mounted = false;
       return;
     }
@@ -126,5 +176,23 @@
     else boot();
   });
 
-  boot();
+  /* Junta chamadas de boot vindas de listeners (auth / refresh de token) numa só por tick.
+     Fica inerte até Auth.ready() + Store.ready() — assim nada renderiza antes da 1ª hidratação. */
+  let bootQueued = false, appReady = false;
+  function scheduleBoot() {
+    if (!appReady || bootQueued) return;
+    bootQueued = true;
+    Promise.resolve().then(function () { bootQueued = false; boot(); });
+  }
+
+  /* Re-renderiza quando a sessão do Supabase muda (login/logout em outra aba, refresh de token) */
+  Auth.onChange(scheduleBoot);
+
+  /* Só decide entre CRM e tela de login depois que o Supabase restaurou a sessão existente */
+  (async function () {
+    await Auth.ready();
+    await Store.ready();   // só decide entre CRM / login / erro depois que o cache foi hidratado
+    appReady = true;
+    scheduleBoot();
+  })();
 })();

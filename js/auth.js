@@ -1,35 +1,130 @@
-/* Login, sessão e permissões */
+/* Login, sessão e permissões — via Supabase Auth (modo nuvem).
+   O login local por localStorage foi substituído por supabase.auth.*.
+   A relação com a tabela `usuarios` é feita por usuarios.auth_uid = auth.uid(). */
 window.Auth = (function () {
-  const SKEY = 'crm_session_v1';
-  let currentId = null;
-  try { currentId = localStorage.getItem(SKEY) || null; } catch (e) { currentId = null; }
 
-  function user() {
-    if (!currentId) return null;
-    const u = Store.get('usuarios', currentId);
-    if (!u || u.status !== 'ativo') return null;
-    return u;
+  /* ---------- cliente Supabase (compartilhável com o store.js na próxima etapa) ---------- */
+  let _client = null;
+  function client() {
+    if (_client) return _client;
+    const cfg = window.CRM_CONFIG || {};
+    if (!window.supabase || !cfg.supabaseUrl || !cfg.supabaseAnonKey) {
+      console.error('Supabase indisponível: verifique o config.js e o script @supabase/supabase-js no index.html.');
+      return null;
+    }
+    _client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'crm_sb_auth' }
+    });
+    return _client;
   }
 
-  function login(email, senha) {
-    const u = Store.all('usuarios').find(function (x) {
-      return (x.email || '').toLowerCase() === String(email).toLowerCase().trim();
-    });
-    if (!u) return { ok: false, msg: 'E-mail não encontrado.' };
-    if (u.senha !== senha) return { ok: false, msg: 'Senha incorreta.' };
-    if (u.status === 'bloqueado') return { ok: false, msg: 'Usuário bloqueado. Fale com o administrador.' };
-    if (u.status === 'inativo') return { ok: false, msg: 'Usuário inativo. Fale com o administrador.' };
-    currentId = u.id;
-    try { localStorage.setItem(SKEY, u.id); } catch (e) {}
-    Store.update('usuarios', u.id, { ultimoAcesso: U.nowISO() });
+  /* ---------- estado em memória (a autenticação NÃO usa localStorage próprio) ---------- */
+  let currentUser = null;   // linha de `usuarios` achatada: { id, nome, email, nivel, status, ... }
+  let currentUid = null;    // auth.uid() do Supabase
+  let _ready = false;
+  let _resolveReady;
+  const _readyPromise = new Promise(function (r) { _resolveReady = r; });
+  const _subs = [];
+
+  function onChange(fn) { if (typeof fn === 'function') _subs.push(fn); }
+  function emit() { _subs.forEach(function (fn) { try { fn(); } catch (e) { console.error(e); } }); }
+
+  /* Busca em `usuarios` a linha cujo auth_uid == uid.
+     O RLS libera a leitura assim que o usuário está autenticado e ativo (is_agency_user()). */
+  async function carregarPerfil(uid) {
+    const c = client();
+    if (!c || !uid) return null;
+    const res = await c.from('usuarios').select('id, auth_uid, data').eq('auth_uid', uid).maybeSingle();
+    if (res.error) { console.error('Falha ao carregar o perfil do usuário:', res.error.message); return null; }
+    if (!res.data) return null;
+    return Object.assign({ id: res.data.id }, res.data.data || {});
+  }
+
+  async function sincronizarSessao() {
+    const c = client();
+    if (!c) { currentUser = null; currentUid = null; return; }
+    const r = await c.auth.getSession();
+    const session = r && r.data ? r.data.session : null;
+    if (!session || !session.user) { currentUser = null; currentUid = null; return; }
+    currentUid = session.user.id;
+    currentUser = await carregarPerfil(currentUid);
+  }
+
+  /* Inicialização: restaura a sessão existente (se houver) e passa a ouvir mudanças. */
+  (async function init() {
+    try { await sincronizarSessao(); }
+    catch (e) { console.error('Erro ao iniciar a sessão do Supabase:', e); }
+
+    const c = client();
+    if (c) {
+      c.auth.onAuthStateChange(function (_evento, session) {
+        (async function () {
+          try {
+            if (session && session.user) {
+              currentUid = session.user.id;
+              currentUser = await carregarPerfil(currentUid);
+            } else {
+              currentUid = null; currentUser = null;
+            }
+          } catch (e) { console.error(e); }
+          emit();
+        })();
+      });
+    }
+
+    _ready = true;
+    _resolveReady();
+    emit();
+  })();
+
+  /* ---------- login / logout (assíncronos — usam supabase.auth) ---------- */
+  async function login(email, senha) {
+    const c = client();
+    if (!c) return { ok: false, msg: 'Configuração da nuvem ausente. Verifique o config.js.' };
+
+    let res;
+    try {
+      res = await c.auth.signInWithPassword({
+        email: String(email || '').trim().toLowerCase(),
+        password: String(senha || '')
+      });
+    } catch (e) {
+      return { ok: false, msg: 'Sem conexão com o servidor. Tente novamente.' };
+    }
+
+    if (res.error) {
+      const m = res.error.message || '';
+      if (/invalid login credentials/i.test(m)) return { ok: false, msg: 'E-mail ou senha incorretos.' };
+      if (/email not confirmed/i.test(m))       return { ok: false, msg: 'E-mail ainda não confirmado no Supabase.' };
+      if (/rate limit|too many/i.test(m))       return { ok: false, msg: 'Muitas tentativas. Aguarde um instante e tente de novo.' };
+      return { ok: false, msg: 'Não foi possível entrar: ' + m };
+    }
+
+    currentUid = res.data.user.id;
+    currentUser = await carregarPerfil(currentUid);
+
+    if (!currentUser) {
+      await sair(c);
+      return { ok: false, msg: 'Login válido, mas este e-mail não está cadastrado na tabela de usuários do CRM.' };
+    }
+    if (currentUser.status === 'bloqueado') { await sair(c); return { ok: false, msg: 'Usuário bloqueado. Fale com o administrador.' }; }
+    if (currentUser.status === 'inativo')   { await sair(c); return { ok: false, msg: 'Usuário inativo. Fale com o administrador.' }; }
+
     return { ok: true };
   }
 
-  function logout() {
-    currentId = null;
-    try { localStorage.removeItem(SKEY); } catch (e) {}
+  async function sair(c) {
+    try { await (c || client()).auth.signOut(); } catch (e) { console.error(e); }
+    currentUser = null; currentUid = null;
   }
+  async function logout() { await sair(); emit(); }
 
+  /* ---------- leitura de sessão / permissões (API pública síncrona preservada) ---------- */
+  function user() {
+    if (!currentUser || currentUser.status !== 'ativo') return null;
+    return currentUser;
+  }
+  function currentId() { return currentUser ? currentUser.id : null; }
   function nivel() { const u = user(); return u ? u.nivel : null; }
   function isAdmin() { return nivel() === 'admin'; }
   function isGestor() { return nivel() === 'gestor'; }
@@ -41,7 +136,8 @@ window.Auth = (function () {
   function scope(list, campo) {
     campo = campo || 'consultorId';
     if (canSeeAll()) return list;
-    return list.filter(function (x) { return x[campo] === currentId; });
+    const id = currentId();
+    return list.filter(function (x) { return x[campo] === id; });
   }
 
   function menu() {
@@ -55,6 +151,11 @@ window.Auth = (function () {
     user: user, login: login, logout: logout, nivel: nivel,
     isAdmin: isAdmin, isGestor: isGestor, isConsultor: isConsultor,
     canSeeAll: canSeeAll, canEdit: canEdit, scope: scope, menu: menu,
-    currentId: function () { return currentId; }
+    currentId: currentId,
+    /* utilitários para a próxima etapa (app.js / store.js) */
+    ready: function () { return _readyPromise; },
+    isReady: function () { return _ready; },
+    onChange: onChange,
+    client: client
   };
 })();

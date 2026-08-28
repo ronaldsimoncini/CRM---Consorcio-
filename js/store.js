@@ -1,5 +1,33 @@
-/* Camada de dados - tudo no localStorage do navegador.
-   Coleções: usuarios, produtos, leads, indicadores, simulacoes, propostas, vendas, metas, historico */
+/* Camada de dados do CRM.
+
+   Migração para o Supabase — separação estrita de modos:
+
+     'local'         -> O Supabase NÃO está configurado neste ambiente.
+                        O localStorage é o banco. Comportamento clássico do CRM.
+
+     'cloud'         -> Supabase configurado + sessão autenticada + hidratação OK.
+                        Todas as leituras vêm do cache; as gravações vão para o
+                        servidor por uma fila serial. O localStorage do CRM NÃO
+                        é lido nem escrito.
+
+     'cloud-pending' -> Supabase configurado, ainda sem sessão (tela de login).
+                        Cache vazio (defaults). Nenhuma gravação é aceita.
+
+     'error'         -> Supabase configurado + sessão, mas a hidratação FALHOU
+                        (rede, RLS, tabela inexistente, erro do banco, etc).
+                        O CRM fica CLARAMENTE em modo de erro: cache vazio, NENHUM
+                        dado antigo do localStorage é carregado como se fosse atual,
+                        e NENHUMA gravação é aceita (não dá impressão de "salvo").
+
+   Regra de ouro: se o Supabase está configurado, o CRM nunca "cai" silenciosamente
+   para o localStorage. Ou está em 'cloud', ou está visivelmente em 'error'.
+
+   A API pública do Store continua IGUAL (mesmos nomes/assinaturas, leituras
+   síncronas, escritas com retorno síncrono) — nenhuma view precisa mudar.
+
+   Coleções: usuarios, produtos, indicadores, leads, simulacoes, propostas,
+   metas, vendas, historico + config.
+   `consultores` continua existindo APENAS no cache, por compatibilidade. */
 window.Store = (function () {
   const KEY = 'crm_consorcio_v1';
   const subs = [];
@@ -21,8 +49,25 @@ window.Store = (function () {
     aprovada: 'Aprovada', recusada: 'Recusada', cancelada: 'Cancelada'
   };
 
-  let data = load();
+  /* coleções que existem como tabela no Supabase (config é tratada à parte) */
+  const COLLECTIONS = ['usuarios', 'produtos', 'indicadores', 'leads', 'simulacoes', 'propostas', 'metas', 'vendas', 'historico'];
+
   let _batch = 0, _dirty = false;
+
+  /* ---------- estado de modo ---------- */
+  let _mode = 'cloud-pending';      // 'local' | 'cloud' | 'cloud-pending' | 'error'
+  let _lastError = null;
+  let _hydrated = false;
+  let _hydrateToken = 0;            // invalida hidratações concorrentes (última vence)
+  let _retryTimer = null;
+  let _queue = Promise.resolve();   // fila serial de gravações no Supabase
+  let _resolveReady, _readyResolved = false;
+  const _readyPromise = new Promise(function (r) { _resolveReady = r; });
+
+  /* Cache em memória — mesma estrutura de sempre. Começa VAZIO: só é populado
+     pela hidratação (que decide entre localStorage e Supabase). Assim um usuário
+     de nuvem nunca chega a ver dados do localStorage antigo. */
+  let data = blank();
 
   function blank() {
     return {
@@ -33,6 +78,7 @@ window.Store = (function () {
     };
   }
 
+  /* Lê o localStorage do CRM. SÓ é chamada no modo 'local'. */
   function load() {
     try {
       const raw = localStorage.getItem(KEY);
@@ -44,15 +90,9 @@ window.Store = (function () {
     }
   }
 
-  /* Garante estrutura mínima ao abrir dados de versões anteriores */
+  /* Garante estrutura mínima ao abrir dados de versões anteriores (modo local). */
   function migrate(d) {
-    d.config = d.config || {};
-    if (!d.config.empresa) d.config.empresa = 'LFT Consórcios';
-    if (!d.config.origens || !d.config.origens.length) d.config.origens = DEFAULT_ORIGENS.slice();
-    if (!d.config.administradoras || !d.config.administradoras.length) d.config.administradoras = DEFAULT_ADMINS.slice();
-    if (!Array.isArray(d.config.painelTokens)) d.config.painelTokens = [];
-    ['usuarios', 'consultores', 'produtos', 'leads', 'indicadores', 'simulacoes', 'propostas', 'vendas', 'metas', 'historico']
-      .forEach(function (k) { if (!Array.isArray(d[k])) d[k] = []; });
+    normalize(d);
 
     /* consultores das versões antigas viram usuários (nível consultor), preservando o id */
     d.consultores.forEach(function (c) {
@@ -82,27 +122,209 @@ window.Store = (function () {
     return d;
   }
 
+  /* Normalização leve, usada também na nuvem: só garante arrays e campos de config.
+     NUNCA injeta admin/produtos padrão — na nuvem o servidor é a fonte da verdade. */
+  function normalize(d) {
+    d.config = d.config || {};
+    if (!d.config.empresa) d.config.empresa = 'LFT Consórcios';
+    if (!d.config.origens || !d.config.origens.length) d.config.origens = DEFAULT_ORIGENS.slice();
+    if (!d.config.administradoras || !d.config.administradoras.length) d.config.administradoras = DEFAULT_ADMINS.slice();
+    if (!Array.isArray(d.config.painelTokens)) d.config.painelTokens = [];
+    ['usuarios', 'consultores', 'produtos', 'leads', 'indicadores', 'simulacoes', 'propostas', 'vendas', 'metas', 'historico']
+      .forEach(function (k) { if (!Array.isArray(d[k])) d[k] = []; });
+    return d;
+  }
+
   function seedInto(d) {
     migrate(d);
     d._seeded = true;
     return d;
   }
 
-  function save() {
+  /* ---------- conversão linha do banco <-> objeto das views ---------- */
+  /* Banco: { id, data:{...} }   |   Views: { id, ...data } */
+  function rowToObj(row) { return Object.assign({ id: row.id }, row.data || {}); }
+  function objToRow(obj) {
+    const row = { id: obj.id, data: {} };
+    Object.keys(obj).forEach(function (k) { if (k !== 'id') row.data[k] = obj[k]; });
+    return JSON.parse(JSON.stringify(row)); // snapshot: imune a mutações posteriores no cache
+  }
+
+  /* ---------- avisos ao usuário ---------- */
+  function toast(msg) {
+    try {
+      if (window.C && typeof window.C.toast === 'function') { window.C.toast(msg); return; }
+    } catch (e) { /* ignora */ }
+    console.warn('[Store]', msg);
+  }
+
+  function sbClient() {
+    try { return (window.Auth && typeof window.Auth.client === 'function') ? window.Auth.client() : null; }
+    catch (e) { return null; }
+  }
+  function sbUser() {
+    try { return (window.Auth && typeof window.Auth.user === 'function') ? window.Auth.user() : null; }
+    catch (e) { return null; }
+  }
+
+  function finishReady() {
+    _hydrated = true;
+    if (!_readyResolved) { _readyResolved = true; try { _resolveReady(_mode); } catch (e) { /* noop */ } }
+  }
+
+  /* ---------- hidratação ---------- */
+  async function hydrate() {
+    const my = ++_hydrateToken;
+
+    try {
+      if (window.Auth && typeof window.Auth.ready === 'function') await window.Auth.ready();
+    } catch (e) { console.error('Auth.ready() falhou:', e); }
+    if (my !== _hydrateToken) return _mode;
+
+    const c = sbClient();
+
+    /* ===== MODO LOCAL — Supabase não configurado neste ambiente ===== */
+    if (!c) {
+      _mode = 'local';
+      _lastError = null;
+      data = load();                 // ÚNICO ponto que lê o localStorage do CRM
+      finishReady();
+      emit();
+      return _mode;
+    }
+
+    /* ===== Supabase configurado — daqui em diante é família CLOUD ===== */
+    /* (o localStorage do CRM não é tocado em nenhum caminho abaixo) */
+    const u = sbUser();
+    if (!u) {
+      _mode = 'cloud-pending';        // tela de login; usa apenas config().empresa
+      _lastError = null;
+      data = blank();
+      finishReady();
+      emit();
+      return _mode;
+    }
+
+    try {
+      const fresh = blank();
+
+      const results = await Promise.all(
+        COLLECTIONS.map(function (k) { return c.from(k).select('id, data'); })
+      );
+      if (my !== _hydrateToken) return _mode;
+
+      COLLECTIONS.forEach(function (k, i) {
+        const res = results[i];
+        if (res.error) throw new Error(k + ': ' + res.error.message);
+        fresh[k] = (res.data || []).map(rowToObj);
+      });
+
+      const cfgRes = await c.from('config').select('data').eq('id', 1).maybeSingle();
+      if (my !== _hydrateToken) return _mode;
+      if (cfgRes.error) throw new Error('config: ' + cfgRes.error.message);
+      fresh.config = Object.assign(blank().config, (cfgRes.data && cfgRes.data.data) || {});
+
+      fresh.consultores = [];  // compatibilidade: não há tabela; fica só no cache
+      fresh._seeded = false;
+
+      data = normalize(fresh);
+      _mode = 'cloud';
+      _lastError = null;
+      if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+      finishReady();
+      emit();
+    } catch (e) {
+      if (my !== _hydrateToken) return _mode;
+      console.error('Falha ao carregar os dados do Supabase (modo de erro):', e);
+      _mode = 'error';
+      _lastError = e;
+      data = blank();                 // NÃO carrega localStorage: dados antigos não entram como se fossem atuais
+      finishReady();
+      toast('Não foi possível carregar os dados do servidor. O CRM está em MODO DE ERRO — nada será salvo até a conexão voltar. Recarregue a página para tentar novamente.');
+      scheduleRetry();
+      emit();
+    }
+    return _mode;
+  }
+
+  /* Enquanto estiver em erro, tenta re-hidratar sozinho de tempos em tempos. */
+  function scheduleRetry() {
+    if (_retryTimer) return;
+    _retryTimer = setTimeout(function () {
+      _retryTimer = null;
+      if (_mode === 'error') {
+        toast('Tentando reconectar ao servidor…');
+        hydrate();
+      }
+    }, 20000);
+  }
+
+  /* Zera o cache. Usado no logout, antes de re-hidratar para o próximo usuário. */
+  function clear() {
+    data = blank();
+    _hydrated = false;
+    _mode = sbClient() ? 'cloud-pending' : 'local';
+    emit();
+  }
+
+  function ready() { return _readyPromise; }
+
+  /* ---------- fila serial de gravações no Supabase ---------- */
+  function enqueue(taskFn) {
+    _queue = _queue.then(function () { return taskFn(); }).catch(function (e) {
+      console.error('Erro ao gravar no Supabase:', e);
+      toast('Falha ao salvar no servidor: ' + (e && e.message || e) + '. Recarregando os dados do servidor…');
+      /* cache otimista pode ter divergido — re-sincroniza (pode ir para modo de erro) */
+      hydrate();
+    });
+    return _queue;
+  }
+  function serverError(res) { if (res && res.error) throw new Error(res.error.message || 'erro desconhecido'); return res; }
+
+  function pushUpsert(k, row) {
+    if (_mode !== 'cloud') return;
+    const c = sbClient(); if (!c) return;
+    enqueue(function () { return c.from(k).upsert(row).then(serverError); });
+  }
+  function pushDelete(k, id) {
+    if (_mode !== 'cloud') return;
+    const c = sbClient(); if (!c) return;
+    enqueue(function () { return c.from(k).delete().eq('id', id).then(serverError); });
+  }
+
+  /* Bloqueia qualquer gravação fora de 'local'/'cloud'. Lança erro (a operação
+     NÃO acontece nem no cache) para não dar a impressão de que foi salva. */
+  function assertWritable() {
+    if (_mode === 'local' || _mode === 'cloud') return;
+    const msg = (_mode === 'error')
+      ? 'O CRM está em modo de erro (sem conexão com o servidor). A alteração NÃO foi salva.'
+      : 'Sessão ainda não confirmada com o servidor. Entre novamente para salvar as alterações.';
+    toast(msg);
+    throw new Error('[Store] gravação bloqueada — modo "' + _mode + '". ' + msg);
+  }
+
+  /* ---------- persistência local / notificação ---------- */
+  function emit() { subs.forEach(function (fn) { try { fn(); } catch (e) { console.error(e); } }); }
+
+  /* Grava no localStorage SOMENTE no modo 'local'. Notifica os assinantes sempre. */
+  function flush() {
     if (_batch > 0) { _dirty = true; return; }
-    localStorage.setItem(KEY, JSON.stringify(data));
-    subs.forEach(function (fn) { try { fn(); } catch (e) { console.error(e); } });
+    if (_mode === 'local') {
+      try { localStorage.setItem(KEY, JSON.stringify(data)); }
+      catch (e) { console.error('Falha ao salvar no localStorage:', e); }
+    }
+    emit();
   }
   function batch(fn) {
     _batch++;
     try { fn(); } finally {
       _batch--;
-      if (_batch === 0 && _dirty) { _dirty = false; save(); }
+      if (_batch === 0 && _dirty) { _dirty = false; flush(); }
     }
   }
   function subscribe(fn) { subs.push(fn); }
 
-  /* ---------- leitura ---------- */
+  /* ---------- leitura (síncrona, sempre do cache) ---------- */
   function all(k) { return data[k].slice(); }
   function get(k, id) { return data[k].find(function (x) { return x.id === id; }); }
   function config() { return data.config; }
@@ -112,34 +334,54 @@ window.Store = (function () {
     return { ETAPAS: ETAPAS, MOTIVOS_PERDA: MOTIVOS_PERDA, STATUS_PROPOSTA: STATUS_PROPOSTA, LABEL_PROPOSTA: LABEL_PROPOSTA };
   }
 
-  /* ---------- escrita ---------- */
+  /* ---------- escrita (retorno síncrono; cache antes do servidor) ---------- */
   function insert(k, obj) {
-    obj.id = obj.id || U.uid();
+    assertWritable();
+    obj.id = obj.id || U.uid();               // ID gerado localmente — a view usa venda.id na hora
     obj.criadoEm = obj.criadoEm || U.nowISO();
     data[k].push(obj);
-    save();
+    if (COLLECTIONS.indexOf(k) >= 0) pushUpsert(k, objToRow(obj));
+    flush();
     return obj;
   }
   function update(k, id, patch) {
+    assertWritable();
     const i = data[k].findIndex(function (x) { return x.id === id; });
     if (i < 0) return null;
     data[k][i] = Object.assign({}, data[k][i], patch);
-    save();
+    if (COLLECTIONS.indexOf(k) >= 0) pushUpsert(k, objToRow(data[k][i]));
+    flush();
     return data[k][i];
   }
   function remove(k, id) {
+    assertWritable();
     data[k] = data[k].filter(function (x) { return x.id !== id; });
-    save();
+    if (COLLECTIONS.indexOf(k) >= 0) pushDelete(k, id);
+    flush();
   }
-  function setConfig(patch) { data.config = Object.assign({}, data.config, patch); save(); }
+  function setConfig(patch) {
+    assertWritable();
+    data.config = Object.assign({}, data.config, patch);
+    if (_mode === 'cloud') {
+      const c = sbClient();
+      if (c) {
+        const snapshot = JSON.parse(JSON.stringify(data.config));
+        enqueue(function () { return c.from('config').upsert({ id: 1, data: snapshot }).then(serverError); });
+      }
+    }
+    flush();
+  }
 
   /* ---------- histórico do lead ---------- */
   function logHist(leadId, tipo, texto, usuarioId) {
-    data.historico.push({
+    assertWritable();
+    const h = {
       id: U.uid(), leadId: leadId, tipo: tipo, texto: texto,
       usuarioId: usuarioId || null, data: U.nowISO()
-    });
-    save();
+    };
+    data.historico.push(h);
+    pushUpsert('historico', objToRow(h));
+    flush();
   }
   function historyOf(leadId) {
     return data.historico.filter(function (h) { return h.leadId === leadId; })
@@ -147,9 +389,16 @@ window.Store = (function () {
   }
 
   /* ---------- dados ---------- */
-  function resetAll() { data = blank(); seedInto(data); save(); }
+  function resetAll() {
+    if (_mode !== 'local') {
+      toast('“Limpar tudo” só está disponível no modo local nesta versão. Nenhum dado foi apagado.');
+      return;
+    }
+    data = blank(); seedInto(data); flush();
+  }
 
   function loadDemo() {
+    if (_mode !== 'local' && _mode !== 'cloud') { assertWritable(); return; }
     batch(function () {
       const cons = data.usuarios.filter(function (u) { return u.nivel === 'consultor' && u.status === 'ativo'; });
       if (!cons.length) return;
@@ -192,10 +441,27 @@ window.Store = (function () {
     });
   }
 
+  /* ---------- inicialização: hidrata e re-hidrata a cada mudança de sessão ---------- */
+  setTimeout(function () {
+    try {
+      if (window.Auth && typeof window.Auth.onChange === 'function') {
+        window.Auth.onChange(function () {
+          if (!sbUser()) clear();     // logout: não mantém dados do usuário anterior na tela
+          hydrate();
+        });
+      }
+    } catch (e) { console.error(e); }
+    hydrate();
+  }, 0);
+
   return {
     all: all, get: get, config: config, etapas: etapas, etapaLabel: etapaLabel, constants: constants,
     insert: insert, update: update, remove: remove, setConfig: setConfig,
     logHist: logHist, historyOf: historyOf, subscribe: subscribe, batch: batch,
-    resetAll: resetAll, loadDemo: loadDemo, _data: function () { return data; }
+    resetAll: resetAll, loadDemo: loadDemo, _data: function () { return data; },
+    /* migração Supabase */
+    ready: ready, hydrate: hydrate, clear: clear,
+    _mode: function () { return _mode; },
+    _error: function () { return _lastError; }
   };
 })();
