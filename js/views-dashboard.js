@@ -49,7 +49,7 @@
       let leads = Auth.scope(Store.all('leads'));
       let vendas = Auth.scope(Store.all('vendas')).filter(function (v) { return v.status === 'venda_realizada'; });
       let props = Store.all('propostas');
-      if (!Auth.canSeeAll()) props = props.filter(function (p) { return p.consultorId === Auth.currentId(); });
+      if (!Auth.canSeeAll()) props = props.filter(function (p) { return Auth.owns(p); });
 
       if (state.consultor) { leads = leads.filter(f('consultorId', state.consultor)); vendas = vendas.filter(f('consultorId', state.consultor)); props = props.filter(f('consultorId', state.consultor)); }
       if (state.adm) vendas = vendas.filter(f('administradora', state.adm));

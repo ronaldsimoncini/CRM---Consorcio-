@@ -119,6 +119,42 @@ window.Auth = (function () {
   }
   async function logout() { await sair(); emit(); }
 
+  /* ---------- administração de usuários (via função serverless) ----------
+     Envia o access_token da sessão (JWT do admin) no header Authorization.
+     A service_role key vive SÓ no servidor; o navegador nunca a vê. */
+  async function adminApi(action, payload) {
+    const c = client();
+    if (!c) return { ok: false, msg: 'Configuração da nuvem ausente.' };
+    let token = null;
+    try {
+      const s = await c.auth.getSession();
+      token = s && s.data && s.data.session && s.data.session.access_token;
+    } catch (e) { /* ignora */ }
+    if (!token) return { ok: false, msg: 'Sua sessão expirou. Entre novamente.' };
+
+    const base = (window.CRM_CONFIG && window.CRM_CONFIG.painelApiBase) || '';
+    let res, body;
+    try {
+      res = await fetch(base + '/api/admin-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify(Object.assign({ action: action }, payload || {}))
+      });
+      body = await res.json().catch(function () { return {}; });
+    } catch (e) {
+      return { ok: false, msg: 'Sem conexão com o servidor. Tente novamente.' };
+    }
+    if (!res.ok || !body || body.ok !== true) {
+      return {
+        ok: false,
+        msg: (body && (body.error || body.msg)) || ('Erro no servidor (' + res.status + ').'),
+        inconsistent: !!(body && body.inconsistent),
+        authUid: body && body.authUid
+      };
+    }
+    return { ok: true, data: body };
+  }
+
   /* ---------- leitura de sessão / permissões (API pública síncrona preservada) ---------- */
   function user() {
     if (!currentUser || currentUser.status !== 'ativo') return null;
@@ -132,12 +168,22 @@ window.Auth = (function () {
   function canSeeAll() { return isAdmin() || isGestor(); }
   function canEdit() { return isAdmin() || isConsultor(); } /* gestor é somente leitura */
 
-  /* Filtra uma lista de leads/propostas/vendas conforme o nível */
+  /* Um registro pertence ao usuário logado?
+     Critério principal: owner_uid === auth.uid() (o mesmo que o RLS usará).
+     Fallback: registros SEM owner_uid (legado / os 25 leads antigos) usam o
+     campo de negócio (consultorId por padrão) — assim nada muda no que já existe. */
+  function owns(rec, campo) {
+    if (!rec) return false;
+    if (rec.owner_uid != null) return rec.owner_uid === currentUid;
+    return rec[campo || 'consultorId'] === currentId();
+  }
+
+  /* Filtra uma lista de leads/propostas/vendas conforme o nível.
+     admin/gestor: vê tudo (comportamento atual preservado).
+     consultor: vê só o que é seu, por owner_uid (com fallback para o campo de negócio). */
   function scope(list, campo) {
-    campo = campo || 'consultorId';
     if (canSeeAll()) return list;
-    const id = currentId();
-    return list.filter(function (x) { return x[campo] === id; });
+    return list.filter(function (x) { return owns(x, campo); });
   }
 
   function menu() {
@@ -150,8 +196,9 @@ window.Auth = (function () {
   return {
     user: user, login: login, logout: logout, nivel: nivel,
     isAdmin: isAdmin, isGestor: isGestor, isConsultor: isConsultor,
-    canSeeAll: canSeeAll, canEdit: canEdit, scope: scope, menu: menu,
-    currentId: currentId,
+    canSeeAll: canSeeAll, canEdit: canEdit, scope: scope, owns: owns, menu: menu,
+    currentId: currentId, adminApi: adminApi,
+    uid: function () { return currentUid; },   /* auth.uid() da sessão atual (para owner_uid) */
     /* utilitários para a próxima etapa (app.js / store.js) */
     ready: function () { return _readyPromise; },
     isReady: function () { return _ready; },

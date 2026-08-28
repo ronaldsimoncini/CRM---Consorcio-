@@ -100,7 +100,7 @@
       const fs = f.querySelector('#f-st').value, fc = f.querySelector('#f-cons').value, fa = f.querySelector('#f-adm').value;
       const leadIds = scopedLeads().reduce(function (m, l) { m[l.id] = true; return m; }, {});
       const rows = Store.all('propostas').filter(function (p) {
-        if (!Auth.canSeeAll() && !leadIds[p.leadId] && p.consultorId !== Auth.currentId()) return false;
+        if (!Auth.canSeeAll() && !leadIds[p.leadId] && !Auth.owns(p)) return false;
         if (fs && p.status !== fs) return false;
         if (fc && p.consultorId !== fc) return false;
         if (fa && p.administradora !== fa) return false;
@@ -162,7 +162,16 @@
           comissao: fnum(b, 'com'), obs: fval(b, 'obs'), status: 'venda_realizada'
         };
         rec.metaId = C.metaParaVenda(Object.assign({}, venda, rec));
-        if (isNew) Store.insert('vendas', rec); else Store.update('vendas', venda.id, rec);
+        if (isNew) {
+          /* Fase 2: dono da venda = consultor logado, ou o consultor escolhido pelo admin/gestor */
+          const ou = Auth.isConsultor()
+            ? (Auth.uid && Auth.uid())
+            : (rec.consultorId && Store.ownerUidFor ? Store.ownerUidFor(rec.consultorId) : null);
+          if (ou) rec.owner_uid = ou;
+          Store.insert('vendas', rec);
+        } else {
+          Store.update('vendas', venda.id, rec);
+        }
         C.toast('Venda salva. Dashboard, relatórios e metas atualizados.');
         if (after) after();
       }

@@ -46,35 +46,95 @@
   /* ---------- usuários ---------- */
   function userForm(u) {
     const isNew = !u;
-    u = u || { nome: '', email: '', telefone: '', cargo: '', nivel: 'consultor', status: 'ativo', senha: '123456' };
+    u = u || { nome: '', email: '', telefone: '', cargo: '', nivel: 'consultor', status: 'ativo' };
+    const err = U.el('<div class="login-err" style="margin:6px 0"></div>');
+
     const b = buildForm(
       C.field('Nome', '<input name="nome" value="' + U.esc(u.nome) + '">', true) +
-      C.field('E-mail (login)', '<input name="email" value="' + U.esc(u.email) + '">') +
-      C.field('Senha', '<input name="senha" value="' + U.esc(u.senha) + '">') +
+      C.field('E-mail (login)', '<input name="email" type="email" value="' + U.esc(u.email) + '"' + (isNew ? '' : ' disabled') + '>') +
+      (isNew ? C.field('Senha (mín. 6 caracteres)', '<input name="senha" type="text" value="" autocomplete="new-password">') : '') +
       C.field('Telefone', '<input name="tel" value="' + U.esc(u.telefone || '') + '">') +
       C.field('Cargo', '<input name="cargo" value="' + U.esc(u.cargo || '') + '">') +
       C.field('Nível de acesso', '<select name="nivel">' + C.opts(NIVEIS, u.nivel) + '</select>') +
       C.field('Status', '<select name="status">' + C.opts(STATUS, u.status) + '</select>')
     );
-    C.modal(isNew ? 'Novo usuário' : 'Editar usuário', b, {
-      saveLabel: 'Salvar', onSave: function () {
-        const email = fval(b, 'email').toLowerCase();
-        if (!fval(b, 'nome')) { alert('Informe o nome.'); return false; }
-        if (!email) { alert('Informe o e-mail (usado no login).'); return false; }
-        const dup = Store.all('usuarios').find(function (x) { return x.email.toLowerCase() === email && x.id !== (u.id || ''); });
-        if (dup) { alert('Já existe um usuário com este e-mail.'); return false; }
-        const rec = {
-          nome: fval(b, 'nome'), email: email, senha: fval(b, 'senha') || '123456',
-          telefone: fval(b, 'tel'), cargo: fval(b, 'cargo'), nivel: fval(b, 'nivel'), status: fval(b, 'status')
+    b.appendChild(err);
+
+    if (isNew) {
+      b.appendChild(U.el('<div class="field full"><span></span><div class="muted">' +
+        'Ao criar, o login é gerado no Supabase e o usuário já pode entrar. A senha é usada só para criar o login — ' +
+        'não fica guardada no banco.</div></div>'));
+    } else {
+      b.appendChild(U.el('<div class="field full"><span></span><div class="muted">' +
+        'Nome, telefone, cargo, nível e status podem ser editados aqui. A troca de e-mail ou senha de um usuário ' +
+        'existente ainda não é feita pelo CRM.</div></div>'));
+      if (!u.authUid) {
+        const linkWrap = U.el('<div class="field full"><span>Vincular login existente</span>' +
+          '<div class="inline-pick"><input name="linkuid" placeholder="UID do usuário no Supabase Auth">' +
+          '<button type="button" class="btn ghost sm" data-act="link">Vincular</button></div>' +
+          '<div class="muted">Use se o login já foi criado no painel do Supabase (Authentication → Users → copiar o User UID).</div></div>');
+        linkWrap.querySelector('[data-act="link"]').onclick = function () {
+          const uid = String(linkWrap.querySelector('[name="linkuid"]').value || '').trim();
+          if (!uid) { err.textContent = 'Cole o UID do login.'; return; }
+          err.textContent = 'Vinculando…';
+          Auth.adminApi('link', { usuarioId: u.id, authUid: uid }).then(function (r) {
+            if (!r.ok) { err.textContent = r.msg; return; }
+            C.toast('Login vinculado. O usuário já pode entrar.');
+            Store.hydrate();
+            m.close();
+          });
         };
-        if (isNew) { rec.ultimoAcesso = null; Store.insert('usuarios', rec); }
-        else {
-          if (u.id === Auth.currentId() && (rec.status !== 'ativo' || rec.nivel !== 'admin')) {
-            alert('Você não pode remover o seu próprio acesso de administrador enquanto está logado.'); return false;
+        b.appendChild(linkWrap);
+      }
+    }
+
+    let busy = false;
+    const m = C.modal(isNew ? 'Novo usuário' : 'Editar usuário', b, {
+      saveLabel: isNew ? 'Criar usuário' : 'Salvar', onSave: function () {
+        if (busy) return false;
+        err.textContent = '';
+        const nome = fval(b, 'nome');
+        const nivel = fval(b, 'nivel'), status = fval(b, 'status');
+        if (!nome) { err.textContent = 'Informe o nome.'; return false; }
+
+        /* ----- edição de usuário existente (nome / nível / status / telefone / cargo) ----- */
+        if (!isNew) {
+          if (u.id === Auth.currentId() && (status !== 'ativo' || nivel !== 'admin')) {
+            err.textContent = 'Você não pode remover o seu próprio acesso de administrador enquanto está logado.';
+            return false;
           }
-          Store.update('usuarios', u.id, rec);
+          Store.update('usuarios', u.id, {
+            nome: nome, email: u.email,           // e-mail preservado (não editável nesta fase)
+            telefone: fval(b, 'tel'), cargo: fval(b, 'cargo'), nivel: nivel, status: status
+          });
+          C.toast('Usuário salvo.');
+          return; // fecha o modal
         }
-        C.toast('Usuário salvo.');
+
+        /* ----- criação: vai para a função serverless (cria login + registro) ----- */
+        const email = fval(b, 'email').toLowerCase();
+        const senha = fval(b, 'senha');
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { err.textContent = 'E-mail inválido.'; return false; }
+        if (senha.length < 6) { err.textContent = 'A senha precisa ter ao menos 6 caracteres.'; return false; }
+        const dup = Store.all('usuarios').find(function (x) { return (x.email || '').toLowerCase() === email; });
+        if (dup) { err.textContent = 'Já existe um usuário com este e-mail no CRM.'; return false; }
+
+        busy = true;
+        err.textContent = 'Criando usuário…';
+        Auth.adminApi('create', {
+          nome: nome, email: email, senha: senha, nivel: nivel, status: status,
+          telefone: fval(b, 'tel'), cargo: fval(b, 'cargo')
+        }).then(function (r) {
+          busy = false;
+          if (!r.ok) {
+            err.textContent = r.msg + (r.inconsistent && r.authUid ? ' (uid: ' + r.authUid + ')' : '');
+            return;
+          }
+          C.toast('Usuário criado. Ele já pode entrar no CRM.');
+          Store.hydrate();
+          m.close();
+        });
+        return false; // mantém o modal aberto até a API responder
       }
     });
   }
@@ -86,12 +146,14 @@
 
     const list = Store.all('usuarios').sort(function (a, b) { return (a.nome || '').localeCompare(b.nome || ''); });
     const wrap = U.el('<div class="card table-wrap"><table class="table"><thead><tr>' +
-      '<th>Nome</th><th>E-mail</th><th>Telefone</th><th>Cargo</th><th>Nível</th><th>Status</th><th>Cadastro</th><th>Último acesso</th><th></th></tr></thead><tbody></tbody></table></div>');
+      '<th>Nome</th><th>E-mail</th><th>Telefone</th><th>Cargo</th><th>Nível</th><th>Status</th><th>Login</th><th>Cadastro</th><th>Último acesso</th><th></th></tr></thead><tbody></tbody></table></div>');
     const tb = wrap.querySelector('tbody');
     list.forEach(function (u) {
       const stCls = u.status === 'ativo' ? 'st-ok' : u.status === 'bloqueado' ? 'st-bad' : 'st-muted';
+      const loginChip = u.authUid ? C.chip('ATIVO', 'st-ok') : C.chip('PENDENTE', 'st-muted');
       const tr = U.el('<tr><td>' + U.esc(u.nome) + '</td><td>' + U.esc(u.email) + '</td><td>' + U.esc(u.telefone || '—') + '</td>' +
         '<td>' + U.esc(u.cargo || '—') + '</td><td>' + U.esc(u.nivel) + '</td><td>' + C.chip(u.status, stCls) + '</td>' +
+        '<td>' + loginChip + '</td>' +
         '<td>' + U.fmtDate(u.criadoEm) + '</td><td>' + (u.ultimoAcesso ? U.fmtDateTime(u.ultimoAcesso) : '—') + '</td>' +
         '<td class="row-actions"></td></tr>');
       const act = tr.querySelector('.row-actions');
@@ -104,19 +166,20 @@
         const block = U.el('<button class="iconbtn" title="' + (u.status === 'bloqueado' ? 'Desbloquear' : 'Bloquear') + '">' + (u.status === 'bloqueado' ? '🔓' : '🔒') + '</button>');
         block.onclick = function () { Store.update('usuarios', u.id, { status: u.status === 'bloqueado' ? 'ativo' : 'bloqueado' }); };
         act.append(toggle, block);
-        const admins = Store.all('usuarios').filter(function (x) { return x.nivel === 'admin' && x.status === 'ativo'; });
-        if (!(u.nivel === 'admin' && admins.length <= 1)) {
-          const del = U.el('<button class="iconbtn" title="Excluir">🗑️</button>');
-          del.onclick = function () {
-            C.confirm('Excluir "' + u.nome + '"? Os leads, propostas e vendas dele continuam salvos no histórico.', function () { Store.remove('usuarios', u.id); });
-          };
-          act.appendChild(del);
-        }
+        /* Exclusão de usuário foi removida (Fase 4): usar inativo/bloqueado.
+           Nada é apagado do Supabase Auth nem os registros vinculados. */
       }
       tb.appendChild(tr);
     });
     pane.appendChild(wrap);
     pane.appendChild(U.el('<div class="muted">Ao desativar ou bloquear um usuário ele não entra mais no CRM, mas todo o histórico dele é preservado.</div>'));
+    pane.appendChild(U.el('<div class="muted" style="margin-top:8px">' +
+      '<b>Login (coluna acima):</b> “ativo” = o usuário já tem acesso ao Supabase e consegue entrar. ' +
+      '“pendente” = o cadastro existe no CRM mas o login ainda não foi criado.<br>' +
+      'A criação do login exige uma chave privilegiada do servidor e <b>não pode ser feita com segurança pelo navegador</b>. ' +
+      'Ela será feita por uma função no servidor (etapa seguinte). Até lá, o login de cada usuário “pendente” é criado ' +
+      'manualmente no painel do Supabase (Authentication → Add user) e vinculado ao cadastro.' +
+      '</div>'));
   }
 
   /* ---------- listas simples (origens / administradoras) ---------- */

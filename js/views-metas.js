@@ -11,8 +11,8 @@
   function metasVisiveis() {
     const all = Store.all('metas');
     if (Auth.canSeeAll()) return all;
-    const meu = Auth.currentId();
-    return all.filter(function (m) { return m.tipo === 'equipe' || m.consultorId === meu; });
+    /* meta de equipe é de todos; meta individual segue o dono (owner_uid, com fallback consultorId) */
+    return all.filter(function (m) { return m.tipo === 'equipe' || Auth.owns(m); });
   }
 
   function metaForm(meta) {
@@ -47,6 +47,12 @@
         if (!rec.dataInicio || !rec.dataFim) { alert('Informe as datas inicial e final.'); return false; }
         if (rec.dataFim < rec.dataInicio) { alert('A data final deve ser posterior à inicial.'); return false; }
         if (rec.tipo === 'individual' && !rec.consultorId) { alert('Selecione o consultor da meta individual.'); return false; }
+        /* Fase 2: meta individual pertence ao consultor (owner_uid); meta de equipe fica sem dono
+           (visível a todos no RLS da Fase 3). Só grava owner_uid quando o consultor já tem login. */
+        if (rec.tipo === 'individual' && Store.ownerUidFor) {
+          const ou = Store.ownerUidFor(rec.consultorId);
+          if (ou) rec.owner_uid = ou;
+        }
         Store.batch(function () {
           if (isNew) Store.insert('metas', rec); else Store.update('metas', meta.id, rec);
           /* vincula automaticamente as vendas que ainda não têm meta e se encaixam nesta */

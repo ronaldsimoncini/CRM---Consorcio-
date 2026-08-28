@@ -18,6 +18,22 @@
     return { label: 'Em atendimento', cls: 'st-warn' };
   }
 
+  /* ---------------- Fase 2: dono (owner_uid) dos registros ----------------
+     Regra: consultor logado -> a própria sessão; admin/gestor escolhendo um
+     consultor -> o auth.uid() desse consultor (null enquanto ele não tiver
+     login criado — aí o trigger do banco decide). Registros-filho (proposta,
+     venda, simulação, histórico) seguem o dono do lead. */
+  function ownerNovoLead(consultorId) {
+    if (Auth.isConsultor()) return Auth.uid && Auth.uid();
+    return (consultorId && Store.ownerUidFor) ? Store.ownerUidFor(consultorId) : null;
+  }
+  function ownerDoLead(lead, consultorIdFallback) {
+    if (lead && lead.owner_uid) return lead.owner_uid;
+    var cid = consultorIdFallback || (lead && lead.consultorId);
+    return (cid && Store.ownerUidFor) ? Store.ownerUidFor(cid) : null;
+  }
+  function comOwner(rec, ownerUid) { if (ownerUid) rec.owner_uid = ownerUid; return rec; }
+
   /* ---------------- transições de etapa ---------------- */
   function transitionEtapa(lead, nova) {
     if (lead.etapa === nova) return;
@@ -114,11 +130,11 @@
             valorCredito: cred,
             proposta: { valorCredito: cred, valorParcela: fnum(b, 'parc'), administradora: fval(b, 'adm'), data: fval(b, 'data'), consultorId: fval(b, 'cons') }
           });
-          Store.insert('propostas', {
+          Store.insert('propostas', comOwner({
             leadId: lead.id, clienteNome: lead.nome, consultorId: fval(b, 'cons') || lead.consultorId,
             valorCredito: cred, valorParcela: fnum(b, 'parc'), administradora: fval(b, 'adm'),
             data: fval(b, 'data'), status: 'enviada', obs: fval(b, 'obs')
-          });
+          }, ownerDoLead(lead, fval(b, 'cons'))));
           Store.logHist(lead.id, 'proposta', 'Proposta realizada: ' + U.brl(cred), Auth.currentId());
         });
         C.toast('Proposta registrada.');
@@ -156,6 +172,7 @@
             comissao: fnum(b, 'com'), obs: fval(b, 'obs'), status: 'venda_realizada'
           };
           v.metaId = C.metaParaVenda(v);
+          comOwner(v, ownerDoLead(lead, v.consultorId));
           const venda = Store.insert('vendas', v);
           transitionEtapa(lead, 'fechamento');
           Store.update('leads', lead.id, { vendaId: venda.id });
@@ -281,12 +298,12 @@
         const origem = fval(b, 'origem');
         const indicadorId = origem === 'Indicação' ? (fval(b, 'indicador') || null) : null;
         const consId = Auth.isConsultor() ? Auth.currentId() : (fval(b, 'cons') || null);
-        const lead = Store.insert('leads', {
+        const lead = Store.insert('leads', comOwner({
           nome: nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'), email: fval(b, 'email'),
           cidade: fval(b, 'cidade'), origem: origem, indicadorId: indicadorId, consultorId: consId,
           obs: fval(b, 'obs'), etapa: 'novo', proximoContato: null, valorCredito: null,
           reuniao: null, proposta: null, motivoPerda: null, vendaId: null, atualizadoEm: U.nowISO()
-        });
+        }, ownerNovoLead(consId)));
         Store.logHist(lead.id, 'cadastro',
           'Lead cadastrado. Origem: ' + (origem || '—') + (indicadorId ? '. Indicado por: ' + C.nomeIndicador(indicadorId) : ''),
           Auth.currentId());
@@ -447,13 +464,26 @@
         const nome = fval(b, 'nome');
         if (!nome) { alert('Informe o nome.'); return; }
         const origem = fval(b, 'origem');
-        Store.update('leads', lead.id, {
+        const novoConsId = Auth.isConsultor() ? lead.consultorId : (fval(b, 'cons') || null);
+        const patch = {
           nome: nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'), email: fval(b, 'email'),
           cidade: fval(b, 'cidade'), origem: origem,
           indicadorId: origem === 'Indicação' ? (fval(b, 'indicador') || null) : null,
-          consultorId: Auth.isConsultor() ? lead.consultorId : (fval(b, 'cons') || null),
+          consultorId: novoConsId,
           obs: fval(b, 'obs'), proximoContato: fval(b, 'prox') || null, atualizadoEm: U.nowISO()
-        });
+        };
+        /* reatribuição: o dono (owner_uid) acompanha o novo consultor, se ele já tiver login */
+        const reatribuido = !Auth.isConsultor() && novoConsId !== lead.consultorId;
+        if (reatribuido) {
+          const ou = novoConsId && Store.ownerUidFor ? Store.ownerUidFor(novoConsId) : null;
+          if (ou) patch.owner_uid = ou;
+        }
+        Store.update('leads', lead.id, patch);
+        if (reatribuido) {
+          Store.logHist(lead.id, 'reatribuicao',
+            novoConsId ? 'Lead reatribuído para ' + C.nomeUsuario(novoConsId) : 'Lead sem consultor responsável',
+            Auth.currentId());
+        }
         C.toast('Dados salvos.');
         reopen();
       };
@@ -511,12 +541,12 @@
     );
     C.modal('Nova simulação', b, {
       saveLabel: 'Salvar', onSave: function () {
-        Store.insert('simulacoes', {
+        Store.insert('simulacoes', comOwner({
           leadId: lead.id, consultorId: Auth.currentId() || lead.consultorId,
           valorCredito: fnum(b, 'cred'), parcelas: fnum(b, 'parcelas'), valorParcela: fnum(b, 'parc'),
           administradora: fval(b, 'adm'), grupo: fval(b, 'grupo'), cota: fval(b, 'cota'),
           lance: fnum(b, 'lance'), percentualLance: fnum(b, 'plance'), prazo: fnum(b, 'prazo'), obs: fval(b, 'obs')
-        });
+        }, ownerDoLead(lead, Auth.currentId())));
         Store.logHist(lead.id, 'simulacao', 'Simulação: ' + U.brl(fnum(b, 'cred')), Auth.currentId());
         C.toast('Simulação salva.');
         if (reopen) reopen();

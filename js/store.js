@@ -53,6 +53,9 @@ window.Store = (function () {
   /* coleções que existem como tabela no Supabase (config é tratada à parte) */
   const COLLECTIONS = ['usuarios', 'produtos', 'indicadores', 'leads', 'simulacoes', 'propostas', 'metas', 'vendas', 'historico'];
 
+  /* tabelas que ganharam a coluna owner_uid na Fase 1 (dono do registro, fora do JSONB) */
+  const OWNED = ['leads', 'simulacoes', 'propostas', 'metas', 'vendas', 'historico'];
+
   let _batch = 0, _dirty = false;
 
   /* ---------- estado de modo ---------- */
@@ -143,12 +146,34 @@ window.Store = (function () {
   }
 
   /* ---------- conversão linha do banco <-> objeto das views ---------- */
-  /* Banco: { id, data:{...} }   |   Views: { id, ...data } */
-  function rowToObj(row) { return Object.assign({ id: row.id }, row.data || {}); }
-  function objToRow(obj) {
+  /* Banco: { id, [owner_uid], [auth_uid], data:{...} }   |   Views: { id, ...data, [owner_uid], [authUid] }
+     owner_uid e auth_uid são COLUNAS reais — nunca entram no JSONB. */
+  function rowToObj(row) {
+    const o = Object.assign({ id: row.id }, row.data || {});
+    if (row.owner_uid != null) o.owner_uid = row.owner_uid;
+    if (row.auth_uid != null) o.authUid = row.auth_uid;   // só em usuarios
+    return o;
+  }
+  function objToRow(obj, k) {
+    const ownedTable = OWNED.indexOf(k) >= 0;
     const row = { id: obj.id, data: {} };
-    Object.keys(obj).forEach(function (k) { if (k !== 'id') row.data[k] = obj[k]; });
+    Object.keys(obj).forEach(function (key) {
+      if (key === 'id' || key === 'authUid') return;      // authUid espelha a coluna auth_uid (somente leitura no app)
+      if (key === 'owner_uid') {
+        if (ownedTable && obj[key] != null) row.owner_uid = obj[key]; // vira coluna; descartado se a tabela não tem owner_uid
+        return;
+      }
+      row.data[key] = obj[key];
+    });
     return JSON.parse(JSON.stringify(row)); // snapshot: imune a mutações posteriores no cache
+  }
+
+  /* Fase 2: descobre o auth.uid() de um usuário (consultor) a partir do cache.
+     Devolve null se o usuário ainda não tem login no Supabase (auth_uid nulo). */
+  function ownerUidFor(usuarioId) {
+    if (!usuarioId) return null;
+    const u = data.usuarios.find(function (x) { return x.id === usuarioId; });
+    return (u && u.authUid) || null;
   }
 
   /* ---------- avisos ao usuário ---------- */
@@ -210,7 +235,12 @@ window.Store = (function () {
       const fresh = blank();
 
       const results = await Promise.all(
-        COLLECTIONS.map(function (k) { return c.from(k).select('id, data'); })
+        COLLECTIONS.map(function (k) {
+          var cols = 'id, data';
+          if (k === 'usuarios') cols = 'id, auth_uid, data';
+          else if (OWNED.indexOf(k) >= 0) cols = 'id, owner_uid, data';
+          return c.from(k).select(cols);
+        })
       );
       if (my !== _hydrateToken) return _mode;
 
@@ -341,7 +371,7 @@ window.Store = (function () {
     obj.id = obj.id || U.uid();               // ID gerado localmente — a view usa venda.id na hora
     obj.criadoEm = obj.criadoEm || U.nowISO();
     data[k].push(obj);
-    if (COLLECTIONS.indexOf(k) >= 0) pushUpsert(k, objToRow(obj));
+    if (COLLECTIONS.indexOf(k) >= 0) pushUpsert(k, objToRow(obj, k));
     flush();
     return obj;
   }
@@ -350,7 +380,13 @@ window.Store = (function () {
     const i = data[k].findIndex(function (x) { return x.id === id; });
     if (i < 0) return null;
     data[k][i] = Object.assign({}, data[k][i], patch);
-    if (COLLECTIONS.indexOf(k) >= 0) pushUpsert(k, objToRow(data[k][i]));
+    if (COLLECTIONS.indexOf(k) >= 0) {
+      const row = objToRow(data[k][i], k);
+      /* só grava a coluna owner_uid quando a reatribuição é EXPLÍCITA (owner_uid no patch);
+         edição normal não toca no dono — inclusive dos 25 leads antigos (owner_uid NULL). */
+      if (!Object.prototype.hasOwnProperty.call(patch, 'owner_uid')) delete row.owner_uid;
+      pushUpsert(k, row);
+    }
     flush();
     return data[k][i];
   }
@@ -380,8 +416,11 @@ window.Store = (function () {
       id: U.uid(), leadId: leadId, tipo: tipo, texto: texto,
       usuarioId: usuarioId || null, data: U.nowISO()
     };
+    /* o histórico acompanha o dono do lead (quando o lead já tem owner_uid) */
+    const lead = data.leads.find(function (l) { return l.id === leadId; });
+    if (lead && lead.owner_uid) h.owner_uid = lead.owner_uid;
     data.historico.push(h);
-    pushUpsert('historico', objToRow(h));
+    pushUpsert('historico', objToRow(h, 'historico'));
     flush();
   }
   function historyOf(leadId) {
@@ -461,7 +500,7 @@ window.Store = (function () {
     logHist: logHist, historyOf: historyOf, subscribe: subscribe, batch: batch,
     resetAll: resetAll, loadDemo: loadDemo, _data: function () { return data; },
     /* migração Supabase */
-    ready: ready, hydrate: hydrate, clear: clear,
+    ready: ready, hydrate: hydrate, clear: clear, ownerUidFor: ownerUidFor,
     _mode: function () { return _mode; },
     _error: function () { return _lastError; }
   };
