@@ -338,21 +338,53 @@
   }
 
   /* ---------- Google Calendar (Fase 1: só o fluxo OAuth) ---------- */
+  async function googleStatus() {
+    const c = (window.Auth && Auth.client) ? Auth.client() : null;
+    if (!c) return { connected: false };
+    let token = null;
+    try {
+      const s = await c.auth.getSession();
+      token = s && s.data && s.data.session && s.data.session.access_token;
+    } catch (e) { /* ignora */ }
+    if (!token) return { connected: false };
+    const base = (window.CRM_CONFIG && window.CRM_CONFIG.painelApiBase) || '';
+    try {
+      const res = await fetch(base + '/api/google-calendar/status', { headers: { Authorization: 'Bearer ' + token } });
+      const body = await res.json().catch(function () { return { connected: false }; });
+      return (body && typeof body === 'object') ? body : { connected: false };
+    } catch (e) { return { connected: false, code: 'NETWORK' }; }
+  }
+
   function gcalTab(pane) {
     const card = U.el('<div class="card"><h3 class="card-title">Google Calendar</h3>' +
-      '<div class="muted">Conecte a sua conta Google para que as reuniões do CRM possam, futuramente, ' +
-      'aparecer no seu Google Calendar. Nesta etapa só fazemos a conexão da conta — nada é agendado ainda.</div></div>');
-    const btn = U.el('<button class="btn primary" style="margin-top:12px">Conectar minha conta Google</button>');
+      '<div class="muted" id="gcal-desc">Verificando a conexão…</div></div>');
+    const desc = card.querySelector('#gcal-desc');
+    const btn = U.el('<button class="btn primary" style="margin-top:12px" disabled>Conectar minha conta Google</button>');
     const msg = U.el('<div class="muted" style="margin-top:8px"></div>');
+
     btn.onclick = async function () {
       btn.disabled = true; msg.textContent = 'Abrindo o Google…';
       const r = await Auth.googleCalendarConnect();
       if (r && !r.ok) { btn.disabled = false; msg.textContent = r.msg || 'Não foi possível iniciar a conexão.'; }
       /* em caso de sucesso o navegador já saiu para a tela de consentimento do Google */
     };
+
     card.appendChild(btn);
     card.appendChild(msg);
     pane.appendChild(card);
+
+    googleStatus().then(function (st) {
+      btn.disabled = false;
+      if (st && st.connected) {
+        desc.textContent = st.google_email
+          ? 'Seu Google Calendar está conectado (' + st.google_email + '). Novas reuniões que você criar entram automaticamente no seu calendário.'
+          : 'Seu Google Calendar está conectado. Novas reuniões que você criar entram automaticamente no seu calendário.';
+        btn.textContent = 'Reconectar minha conta Google';
+      } else {
+        desc.textContent = 'Conecte sua conta Google para adicionar automaticamente suas reuniões ao calendário.';
+        btn.textContent = 'Conectar minha conta Google';
+      }
+    });
   }
 
   function dadosTab(pane) {

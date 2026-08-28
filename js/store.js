@@ -512,6 +512,8 @@ window.Store = (function () {
     resetAll: resetAll, loadDemo: loadDemo, _data: function () { return data; },
     /* migração Supabase */
     ready: ready, hydrate: hydrate, clear: clear, ownerUidFor: ownerUidFor,
+    /* aguarda a fila de gravação no Supabase esvaziar (não muda nada do fluxo atual) */
+    sync: function () { return _queue.catch(function () {}); },
     _mode: function () { return _mode; },
     _error: function () { return _lastError; }
   };

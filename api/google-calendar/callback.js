@@ -1,16 +1,17 @@
 /* Função serverless (Vercel):  GET /api/google-calendar/callback
  * -------------------------------------------------------------------------
- * Redirect URI do Google (Fase 1).
+ * Redirect URI do Google.
  *  - recebe ?code & ?state (ou ?error);
  *  - valida o `state` (assinatura HMAC + expiração) ANTES de qualquer troca;
  *  - recupera o auth_uid do `state`;
  *  - troca o code pelos tokens em https://oauth2.googleapis.com/token;
- *  - FASE 1: NÃO grava nada — chama persistTokens() como STUB;
+ *  - FASE 2: persiste a conexão em public.google_calendar_tokens (SERVICE ROLE);
  *  - redireciona de volta ao CRM com ?gcal=connected ou ?gcal=error.
  *
  * Nunca coloca tokens na URL. Nunca escreve tokens em log.
  *
- * ENV: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, OAUTH_STATE_SECRET
+ * ENV: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, OAUTH_STATE_SECRET,
+ *      SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  */
 'use strict';
 
@@ -29,13 +30,11 @@ function backToCrm(res, status) {
   return res.status(302).end();
 }
 
-/* FASE 1: STUB — não persiste nada.
- * Fase 2: UPSERT em public.google_calendar_tokens (ver supabase/google-1_tokens.sql)
- *   { auth_uid (pk), refresh_token, scope, google_email, connected_at, updated_at }
- *   via REST do Supabase com a SERVICE ROLE KEY (somente no servidor).
- *   O refresh_token nunca é lido pelo usuário/anon (RLS sem policy de SELECT). */
+/* Persiste a conexão Google do usuário em public.google_calendar_tokens.
+ * Toda a gravação usa a SERVICE ROLE KEY (só no servidor). O refresh_token
+ * nunca sai daqui — nem para o navegador, nem para log. */
 async function persistTokens(auth_uid, tokens) {
-  return { stub: true };
+  return shared.upsertGoogleTokens(auth_uid, tokens);
 }
 
 module.exports = async function handler(req, res) {
@@ -50,7 +49,7 @@ module.exports = async function handler(req, res) {
       return backToCrm(res, 'error');
     }
 
-    const need = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'OAUTH_STATE_SECRET'];
+    const need = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI', 'OAUTH_STATE_SECRET', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
     for (let i = 0; i < need.length; i++) {
       if (!process.env[need[i]]) { console.error('[gcal callback] env ausente'); return backToCrm(res, 'error'); }
     }
@@ -68,8 +67,11 @@ module.exports = async function handler(req, res) {
       return backToCrm(res, 'error');
     }
 
-    /* FASE 1: não grava — só confirma o fluxo. */
-    await persistTokens(st.auth_uid, ex.tokens);
+    const saved = await persistTokens(st.auth_uid, ex.tokens);
+    if (!saved || saved.error) {
+      console.error('[gcal callback] falha ao persistir a conexão:', (saved && saved.error) || 'sem_retorno');
+      return backToCrm(res, 'error');
+    }
 
     return backToCrm(res, 'connected');
   } catch (e) {

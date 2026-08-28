@@ -35,6 +35,58 @@
     });
   }
 
+  /* ---------------- Google Calendar (Fase 2) ----------------
+     Cria o evento no Google Calendar do PRÓPRIO usuário. O JWT é enviado no
+     header; o servidor identifica o auth_uid pelo token e usa só a conexão
+     Google desse usuário. NUNCA impede/atrapalha a reunião do CRM. */
+  async function apiGooglePost(path, payload) {
+    const c = (window.Auth && Auth.client) ? Auth.client() : null;
+    if (!c) return { ok: false, code: 'NO_CLIENT' };
+    let token = null;
+    try {
+      const s = await c.auth.getSession();
+      token = s && s.data && s.data.session && s.data.session.access_token;
+    } catch (e) { /* ignora */ }
+    if (!token) return { ok: false, code: 'NO_SESSION' };
+    const base = (window.CRM_CONFIG && window.CRM_CONFIG.painelApiBase) || '';
+    try {
+      const res = await fetch(base + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify(payload || {})
+      });
+      const body = await res.json().catch(function () { return {}; });
+      return (body && typeof body === 'object') ? body : { ok: false, code: 'BAD_RESPONSE' };
+    } catch (e) { return { ok: false, code: 'NETWORK' }; }
+  }
+
+  async function agendarNoGoogle(reuniao) {
+    try { if (Store.sync) await Store.sync(); } catch (e) { /* ignora */ }
+
+    const lead = reuniao.leadId ? Store.get('leads', reuniao.leadId) : null;
+    const r = await apiGooglePost('/api/google-calendar/create-event', {
+      reuniaoId: reuniao.id,
+      titulo: reuniao.titulo,
+      data: reuniao.data,
+      horaInicio: reuniao.horaInicio,
+      horaFim: reuniao.horaFim,
+      observacoes: reuniao.observacoes || '',
+      leadNome: lead ? (lead.nome || '') : '',
+      leadTelefone: lead ? (lead.telefone || lead.whatsapp || '') : ''
+    });
+
+    if (r && r.ok && r.eventId) {
+      Store.update('reunioes', reuniao.id, { googleCalendarEventId: r.eventId, googleCalendarStatus: 'created' });
+      C.toast('Reunião adicionada ao seu Google Calendar.');
+      return;
+    }
+    const code = r && r.code;
+    if (code === 'ALREADY_CREATED') return;
+    if (code === 'GOOGLE_NOT_CONNECTED') { C.toast('Reunião salva. Seu Google Calendar ainda não está conectado.'); return; }
+    if (code === 'GOOGLE_REVOKED') { C.toast('Reunião salva. Sua conexão com o Google Calendar precisa ser refeita.'); return; }
+    C.toast('Reunião salva no CRM, mas não foi possível adicionar ao Google Calendar.');
+  }
+
   /* ---------------- formulário ---------------- */
   function reuniaoForm(r) {
     const isNew = !r;
@@ -52,6 +104,10 @@
       '</div>');
     const err = U.el('<div class="login-err" style="margin:6px 0"></div>');
     b.appendChild(err);
+    if (!isNew && r.googleCalendarEventId) {
+      b.appendChild(U.el('<div class="field full"><span></span><div class="muted">' +
+        'Esta reunião já foi adicionada ao Google Calendar. A edição aqui não altera o evento nesta versão.</div></div>'));
+    }
 
     C.modal(isNew ? 'Nova reunião' : 'Editar reunião', b, {
       saveLabel: isNew ? 'Criar reunião' : 'Salvar', onSave: function () {
@@ -76,10 +132,13 @@
         if (isNew) {
           /* responsável = usuário logado (owner_uid = auth.uid()). O trigger do
              banco também garante isso; enviamos explícito para o cache ficar certo na hora. */
-          Store.insert('reunioes', Object.assign({ owner_uid: Auth.uid(), status: 'agendada' }, campos));
+          const nova = Store.insert('reunioes', Object.assign({ owner_uid: Auth.uid(), status: 'agendada' }, campos));
           if (leadId) Store.logHist(leadId, 'reuniao',
             'Reunião agendada: ' + titulo + ' — ' + U.fmtDate(dataISO) + ' ' + ini, Auth.currentId());
           C.toast('Reunião criada.');
+          /* depois de salvar: tenta criar o evento no Google (não bloqueia,
+             não pode desfazer nem impedir a reunião do CRM) */
+          agendarNoGoogle(nova);
         } else {
           const leadAntes = r.leadId || null;
           Store.update('reunioes', r.id, campos);

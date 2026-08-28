@@ -125,9 +125,158 @@ async function exchangeCode(code) {
   return { tokens: j };
 }
 
+/* =========================================================================
+ *  FASE 2 — persistência da conexão + access_token + evento
+ *  Tudo abaixo usa SOMENTE a SUPABASE_SERVICE_ROLE_KEY (backend).
+ *  O refresh_token NUNCA é retornado para quem chama — só é usado aqui
+ *  internamente para falar com o Google. Nada disso vai para log.
+ * ========================================================================= */
+
+const TIMEZONE = 'America/Sao_Paulo';
+const TOKENS_TABLE = 'google_calendar_tokens';
+
+function restBase() { return process.env.SUPABASE_URL + '/rest/v1'; }
+function serviceHeaders(extra) {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  return Object.assign({ apikey: key, Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, extra || {});
+}
+
+/* Lê a linha de tokens do usuário. `cols` = colunas do select.
+   O valor de refresh_token só circula dentro deste módulo. */
+async function getGoogleTokenRow(auth_uid, cols) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return { error: 'not_configured' };
+  const url = restBase() + '/' + TOKENS_TABLE + '?auth_uid=eq.' + encodeURIComponent(auth_uid) +
+    '&select=' + encodeURIComponent(cols || 'auth_uid') + '&limit=1';
+  let r;
+  try { r = await fetch(url, { headers: serviceHeaders() }); }
+  catch (e) { return { error: 'db_network' }; }
+  if (!r.ok) return { error: 'db_error' };
+  const j = await r.json().catch(function () { return null; });
+  if (!Array.isArray(j)) return { error: 'db_error' };
+  return { row: j[0] || null };
+}
+
+/* persistTokens real:
+   - com refresh_token novo  -> UPSERT (merge por auth_uid);
+   - sem refresh_token (reconexão) e já existe linha -> mantém o token atual,
+     atualiza só o scope (NUNCA zera o refresh_token existente);
+   - sem refresh_token e sem linha -> erro 'no_refresh_token';
+   connected_at é preservado (default no 1º insert; não reenviado no merge);
+   updated_at é atualizado pelo trigger da tabela. */
+async function upsertGoogleTokens(auth_uid, tokens) {
+  if (!auth_uid) return { error: 'no_auth_uid' };
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return { error: 'not_configured' };
+  const refresh = tokens && tokens.refresh_token;
+  const scope = (tokens && tokens.scope) || SCOPE;
+
+  if (!refresh) {
+    const cur = await getGoogleTokenRow(auth_uid, 'auth_uid');
+    if (cur.error) return { error: cur.error };
+    if (!cur.row) return { error: 'no_refresh_token' };
+    let r;
+    try {
+      r = await fetch(restBase() + '/' + TOKENS_TABLE + '?auth_uid=eq.' + encodeURIComponent(auth_uid), {
+        method: 'PATCH',
+        headers: serviceHeaders({ Prefer: 'return=minimal' }),
+        body: JSON.stringify({ scope: scope })
+      });
+    } catch (e) { return { error: 'db_network' }; }
+    return r.ok ? { ok: true, kept: true } : { error: 'db_error' };
+  }
+
+  let r;
+  try {
+    r = await fetch(restBase() + '/' + TOKENS_TABLE, {
+      method: 'POST',
+      headers: serviceHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
+      body: JSON.stringify({ auth_uid: auth_uid, refresh_token: refresh, scope: scope })
+    });
+  } catch (e) { return { error: 'db_network' }; }
+  return r.ok ? { ok: true } : { error: 'db_error' };
+}
+
+/* Preenche google_email só se ainda estiver nulo. Silencioso (não crítico). */
+async function setGoogleEmailIfEmpty(auth_uid, email) {
+  if (!auth_uid || !email) return;
+  try {
+    await fetch(restBase() + '/' + TOKENS_TABLE + '?auth_uid=eq.' + encodeURIComponent(auth_uid) + '&google_email=is.null', {
+      method: 'PATCH',
+      headers: serviceHeaders({ Prefer: 'return=minimal' }),
+      body: JSON.stringify({ google_email: String(email) })
+    });
+  } catch (e) { /* silencioso */ }
+}
+
+async function deleteGoogleTokens(auth_uid) {
+  if (!auth_uid) return;
+  try {
+    await fetch(restBase() + '/' + TOKENS_TABLE + '?auth_uid=eq.' + encodeURIComponent(auth_uid), {
+      method: 'DELETE',
+      headers: serviceHeaders({ Prefer: 'return=minimal' })
+    });
+  } catch (e) { /* silencioso */ }
+}
+
+/* Status para o endpoint /status. NUNCA devolve refresh_token. */
+async function getGoogleConnection(auth_uid) {
+  const res = await getGoogleTokenRow(auth_uid, 'google_email');
+  if (res.error) return { error: res.error };
+  if (!res.row) return { connected: false };
+  const out = { connected: true };
+  if (res.row.google_email) out.google_email = res.row.google_email;
+  return out;
+}
+
+/* access_token a partir do refresh_token salvo. Uso interno na requisição.
+   Retorna { access_token } ou { error: 'not_connected'|'revoked'|'google_error'|'db_error'|... }.
+   Em invalid_grant (token revogado) apaga a linha morta. */
+async function getGoogleAccessToken(auth_uid) {
+  const res = await getGoogleTokenRow(auth_uid, 'refresh_token');
+  if (res.error) return { error: res.error };
+  if (!res.row || !res.row.refresh_token) return { error: 'not_connected' };
+
+  const body = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID,
+    client_secret: process.env.GOOGLE_CLIENT_SECRET,
+    refresh_token: res.row.refresh_token,
+    grant_type: 'refresh_token'
+  });
+  let r;
+  try {
+    r = await fetch(GOOGLE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: body.toString()
+    });
+  } catch (e) { return { error: 'google_error' }; }
+  const j = await r.json().catch(function () { return null; });
+  if (!r.ok || !j || !j.access_token) {
+    if (j && j.error === 'invalid_grant') {
+      await deleteGoogleTokens(auth_uid);
+      return { error: 'revoked' };
+    }
+    return { error: 'google_error' };
+  }
+  return { access_token: j.access_token };
+}
+
+/* Monta o corpo do evento do Google Calendar (sem attendees / convites). */
+function buildEventResource(f) {
+  const desc = [];
+  if (f.observacoes) desc.push(String(f.observacoes));
+  if (f.leadNome) desc.push('Lead: ' + String(f.leadNome) + (f.leadTelefone ? ' — ' + String(f.leadTelefone) : ''));
+  return {
+    summary: String(f.titulo || 'Reunião'),
+    description: desc.join('\n\n'),
+    start: { dateTime: f.data + 'T' + f.horaInicio + ':00', timeZone: TIMEZONE },
+    end: { dateTime: f.data + 'T' + f.horaFim + ':00', timeZone: TIMEZONE }
+  };
+}
+
 module.exports = {
   SCOPE: SCOPE,
   STATE_TTL_SECONDS: STATE_TTL_SECONDS,
+  TIMEZONE: TIMEZONE,
   b64urlEncode: b64urlEncode,
   b64urlDecode: b64urlDecode,
   hmac: hmac,
@@ -135,5 +284,12 @@ module.exports = {
   verifyState: verifyState,
   getUserFromToken: getUserFromToken,
   buildConsentUrl: buildConsentUrl,
-  exchangeCode: exchangeCode
+  exchangeCode: exchangeCode,
+  /* Fase 2 */
+  upsertGoogleTokens: upsertGoogleTokens,
+  getGoogleConnection: getGoogleConnection,
+  getGoogleAccessToken: getGoogleAccessToken,
+  setGoogleEmailIfEmpty: setGoogleEmailIfEmpty,
+  deleteGoogleTokens: deleteGoogleTokens,
+  buildEventResource: buildEventResource
 };
