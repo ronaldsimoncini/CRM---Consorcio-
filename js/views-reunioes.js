@@ -87,6 +87,43 @@
     C.toast('Reunião salva no CRM, mas não foi possível adicionar ao Google Calendar.');
   }
 
+  /* Fase 3a: reunião com evento -> atualiza o evento no Google. Nunca cria.
+     Falha do Google NÃO desfaz a edição no CRM. */
+  async function atualizarNoGoogle(reuniaoId, campos, leadId) {
+    try { if (Store.sync) await Store.sync(); } catch (e) { /* ignora */ }
+    const lead = leadId ? Store.get('leads', leadId) : null;
+    const r = await apiGooglePost('/api/google-calendar/update-event', {
+      reuniaoId: reuniaoId,
+      titulo: campos.titulo,
+      data: campos.data,
+      horaInicio: campos.horaInicio,
+      horaFim: campos.horaFim,
+      observacoes: campos.observacoes || '',
+      leadNome: lead ? (lead.nome || '') : '',
+      leadTelefone: lead ? (lead.telefone || lead.whatsapp || '') : ''
+    });
+    if (r && r.ok && r.code === 'UPDATED') { C.toast('Reunião atualizada no Google Calendar.'); return; }
+    if (r && r.code === 'NO_EVENT') return; // não tinha evento — silêncio
+    if (r && r.code === 'EVENT_MISSING') {
+      C.toast('Reunião atualizada no CRM. O evento não existe mais no seu Google Calendar.');
+      return;
+    }
+    C.toast('Reunião atualizada no CRM, mas não foi possível atualizar o Google Calendar.');
+  }
+
+  /* Fase 3a: reunião com evento -> remove o evento do Google. Nunca cria.
+     Falha do Google NÃO desfaz o cancelamento no CRM. */
+  async function removerDoGoogle(reuniaoId) {
+    try { if (Store.sync) await Store.sync(); } catch (e) { /* ignora */ }
+    const r = await apiGooglePost('/api/google-calendar/cancel-event', { reuniaoId: reuniaoId });
+    if (r && r.ok) {
+      if (r.code === 'NO_EVENT') return; // nada a remover
+      C.toast('Reunião cancelada e removida do Google Calendar.');
+      return;
+    }
+    C.toast('Reunião cancelada no CRM, mas não foi possível remover do Google Calendar.');
+  }
+
   /* ---------------- formulário ---------------- */
   function reuniaoForm(r) {
     const isNew = !r;
@@ -106,7 +143,7 @@
     b.appendChild(err);
     if (!isNew && r.googleCalendarEventId) {
       b.appendChild(U.el('<div class="field full"><span></span><div class="muted">' +
-        'Esta reunião já foi adicionada ao Google Calendar. A edição aqui não altera o evento nesta versão.</div></div>'));
+        'Esta reunião está no seu Google Calendar. Ao salvar, o evento é atualizado.</div></div>'));
     }
 
     C.modal(isNew ? 'Nova reunião' : 'Editar reunião', b, {
@@ -145,6 +182,8 @@
           if (leadId && leadId !== leadAntes) Store.logHist(leadId, 'reuniao',
             'Reunião vinculada: ' + titulo + ' — ' + U.fmtDate(dataISO) + ' ' + ini, Auth.currentId());
           C.toast('Reunião salva.');
+          /* se a reunião tem evento Google, atualiza o evento (não bloqueia a edição) */
+          if (r.googleCalendarEventId) atualizarNoGoogle(r.id, campos, leadId);
         }
       }
     });
@@ -162,6 +201,8 @@
       Store.update('reunioes', r.id, { status: 'cancelada', atualizadoEm: U.nowISO() });
       if (r.leadId) Store.logHist(r.leadId, 'reuniao_cancelada', 'Reunião cancelada: ' + r.titulo, Auth.currentId());
       C.toast('Reunião cancelada.');
+      /* se a reunião tem evento Google, remove o evento (não bloqueia o cancelamento) */
+      if (r.googleCalendarEventId) removerDoGoogle(r.id);
     });
   }
 

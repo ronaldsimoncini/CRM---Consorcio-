@@ -260,6 +260,73 @@ async function getGoogleAccessToken(auth_uid) {
   return { access_token: j.access_token };
 }
 
+/* =========================================================================
+ *  FASE 3a — sincronização CRM → Google para EDIÇÃO e CANCELAMENTO
+ *  Nunca cria evento novo aqui: só age sobre um googleCalendarEventId existente.
+ * ========================================================================= */
+
+const GOOGLE_CALENDAR_EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+
+/* Lê a reunião pelo id (SERVICE ROLE). Pequeno retry por segurança. */
+async function getReuniao(reuniaoId) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return { error: 'not_configured' };
+  const url = restBase() + '/reunioes?id=eq.' + encodeURIComponent(reuniaoId) + '&select=id,owner_uid,data&limit=1';
+  for (let i = 0; i < 3; i++) {
+    let r = null;
+    try { r = await fetch(url, { headers: serviceHeaders() }); } catch (e) { r = null; }
+    if (r && r.ok) {
+      const j = await r.json().catch(function () { return null; });
+      if (Array.isArray(j)) return { row: j[0] || null };
+    }
+    if (i < 2) await new Promise(function (res) { setTimeout(res, 300); });
+  }
+  return { error: 'db_error' };
+}
+
+/* Grava data (JSONB) da reunião (SERVICE ROLE). owner_uid não é tocado. */
+async function patchReuniaoData(reuniaoId, newData) {
+  try {
+    const r = await fetch(restBase() + '/reunioes?id=eq.' + encodeURIComponent(reuniaoId), {
+      method: 'PATCH',
+      headers: serviceHeaders({ Prefer: 'return=minimal' }),
+      body: JSON.stringify({ data: newData })
+    });
+    return r.ok;
+  } catch (e) { return false; }
+}
+
+/* PATCH de um evento no primary. Retorna:
+   { ok:true, event } | { gone:true } (404/410) | { error:'http_<n>'|'network' } */
+async function patchGoogleEvent(accessToken, eventId, patchBody) {
+  let r;
+  try {
+    r = await fetch(GOOGLE_CALENDAR_EVENTS + '/' + encodeURIComponent(eventId), {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify(patchBody)
+    });
+  } catch (e) { return { error: 'network' }; }
+  if (r.status === 404 || r.status === 410) return { gone: true };
+  const j = await r.json().catch(function () { return null; });
+  if (!r.ok || !j || !j.id) return { error: 'http_' + r.status };
+  return { ok: true, event: j };
+}
+
+/* DELETE de um evento no primary. Retorna:
+   { ok:true } | { gone:true } (404/410 — já removido) | { error:'http_<n>'|'network' } */
+async function deleteGoogleEvent(accessToken, eventId) {
+  let r;
+  try {
+    r = await fetch(GOOGLE_CALENDAR_EVENTS + '/' + encodeURIComponent(eventId), {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + accessToken }
+    });
+  } catch (e) { return { error: 'network' }; }
+  if (r.status === 404 || r.status === 410) return { gone: true };
+  if (r.ok || r.status === 204) return { ok: true };
+  return { error: 'http_' + r.status };
+}
+
 /* Monta o corpo do evento do Google Calendar (sem attendees / convites). */
 function buildEventResource(f) {
   const desc = [];
@@ -291,5 +358,10 @@ module.exports = {
   getGoogleAccessToken: getGoogleAccessToken,
   setGoogleEmailIfEmpty: setGoogleEmailIfEmpty,
   deleteGoogleTokens: deleteGoogleTokens,
-  buildEventResource: buildEventResource
+  buildEventResource: buildEventResource,
+  /* Fase 3a */
+  getReuniao: getReuniao,
+  patchReuniaoData: patchReuniaoData,
+  patchGoogleEvent: patchGoogleEvent,
+  deleteGoogleEvent: deleteGoogleEvent
 };
