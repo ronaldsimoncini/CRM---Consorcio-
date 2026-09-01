@@ -59,15 +59,26 @@
 
   /* ---------------- formulários de ação ---------------- */
   H.reuniaoForm = function (lead, after) {
+    const rp = lead.reuniao || {};
     const b = buildForm(
-      C.field('Data', '<input type="date" name="data" value="' + U.todayISO() + '">') +
-      C.field('Horário', '<input type="time" name="hora" value="09:00">') +
-      C.field('Consultor', '<select name="cons">' + C.opts(C.usuariosConsultores(), lead.consultorId) + '</select>') +
-      C.field('Observações', '<textarea name="obs"></textarea>', true)
+      C.field('Data da reunião', '<input type="date" name="data" value="' + U.esc(rp.data || U.todayISO()) + '">') +
+      C.field('Hora de início', '<input type="time" name="hora" value="' + U.esc(rp.hora || rp.horaInicio || '09:00') + '">') +
+      C.field('Hora de término', '<input type="time" name="horaFim" value="' + U.esc(rp.horaFim || '10:00') + '">') +
+      C.field('Consultor', '<select name="cons">' + C.opts(C.usuariosConsultores(), rp.consultorId || lead.consultorId) + '</select>') +
+      C.field('Observações', '<textarea name="obs">' + U.esc(rp.obs || rp.observacoes || '') + '</textarea>', true)
     );
+    const err = U.el('<div class="login-err" style="margin:6px 0"></div>');
+    b.appendChild(err);
     C.modal('Agendar reunião', b, {
       saveLabel: 'Agendar', onSave: function () {
-        const dados = { data: fval(b, 'data'), hora: fval(b, 'hora'), consultorId: fval(b, 'cons'), obs: fval(b, 'obs') };
+        err.textContent = '';
+        const dataISO = fval(b, 'data');
+        const ini = fval(b, 'hora'), fim = fval(b, 'horaFim');
+        if (!dataISO) { err.textContent = 'Informe a data da reunião.'; return false; }
+        if (!ini) { err.textContent = 'Informe a hora de início.'; return false; }
+        if (!fim) { err.textContent = 'Informe a hora de término.'; return false; }
+        if (fim <= ini) { err.textContent = 'Horário de término deve ser maior que o horário de início.'; return false; }
+        const dados = { data: dataISO, hora: ini, horaFim: fim, consultorId: fval(b, 'cons'), obs: fval(b, 'obs') };
         Store.batch(function () {
           transitionEtapa(lead, 'reuniao_agendada');
           /* fluxo unificado: cria/atualiza UM registro em 'reunioes' e sincroniza
@@ -82,7 +93,7 @@
           Store.update('leads', lead.id, {
             reuniao: Object.assign({}, dados, row && row.id ? { reuniaoId: row.id } : {})
           });
-          Store.logHist(lead.id, 'reuniao', 'Reunião agendada para ' + U.fmtDate(fval(b, 'data')) + ' às ' + fval(b, 'hora'), Auth.currentId());
+          Store.logHist(lead.id, 'reuniao', 'Reunião agendada para ' + U.fmtDate(dataISO) + ' às ' + ini + '–' + fim, Auth.currentId());
         });
         C.toast('Reunião agendada.');
         if (after) after();

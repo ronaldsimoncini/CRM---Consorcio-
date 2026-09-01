@@ -114,6 +114,11 @@
         cx.onclick = function () { m.close(); Views._reuniao.cancelar(r); };
         extra.push(ok, cx);
       }
+      if (Views._reuniao.excluir && (!Auth.owns || Auth.owns(r))) {
+        const dl = U.el('<button class="btn ghost danger">Excluir</button>');
+        dl.onclick = function () { m.close(); Views._reuniao.excluir(r); };
+        extra.push(dl);
+      }
     }
     /* C.modal insere cada extraButton antes do 1º filho do rodapé (inverte a ordem) */
     const m = C.modal('Reunião', body, { extraButtons: extra.slice().reverse() });

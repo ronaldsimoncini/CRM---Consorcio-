@@ -221,7 +221,7 @@
         if (!dataISO || isNaN(new Date(dataISO + 'T00:00:00').getTime())) { err.textContent = 'Informe uma data válida.'; return false; }
         if (!ini) { err.textContent = 'Informe a hora inicial.'; return false; }
         if (!fim) { err.textContent = 'Informe a hora final.'; return false; }
-        if (fim < ini) { err.textContent = 'A hora final não pode ser antes da hora inicial.'; return false; }
+        if (fim <= ini) { err.textContent = 'Horário de término deve ser maior que o horário de início.'; return false; }
         if (leadId && !Store.get('leads', leadId)) { err.textContent = 'Selecione um lead válido.'; return false; }
 
         const campos = {
@@ -250,6 +250,39 @@
         }
       }
     });
+  }
+
+  /* ---------------- EXCLUIR (definitivo) ----------------
+     Diferente de CANCELAR: remove o registro de public.reunioes.
+     Ordem: 1) remove o evento do Google (API existente, ownership no servidor);
+     2) só então apaga a reunião do CRM. Se o Google falhar, NADA é apagado. */
+  function excluirReuniao(r) {
+    if (!r) return;
+    if (Auth.owns && !Auth.owns(r)) { C.toast('Você não pode excluir uma reunião de outro usuário.'); return; }
+    C.confirm('Tem certeza que deseja excluir esta reunião?', function () {
+      if (r.googleCalendarEventId) removerEventoEExcluir(r);
+      else concluirExclusao(r);
+    });
+  }
+
+  async function removerEventoEExcluir(r) {
+    try { if (Store.sync) await Store.sync(); } catch (e) { /* ignora */ }
+    const resp = await apiGooglePost('/api/google-calendar/cancel-event', { reuniaoId: r.id });
+    if (resp && resp.ok) { concluirExclusao(r); return; }
+    C.toast('Não foi possível remover o evento do Google Calendar. A reunião NÃO foi excluída.');
+  }
+
+  function concluirExclusao(r) {
+    const lead = r.leadId ? Store.get('leads', r.leadId) : null;
+    Store.batch(function () {
+      if (r.leadId) Store.logHist(r.leadId, 'reuniao_excluida',
+        'Reunião excluída: ' + (r.titulo || '') + (r.data ? ' — ' + U.fmtDate(r.data) : ''), Auth.currentId());
+      Store.remove('reunioes', r.id);
+      if (lead && lead.reuniao && lead.reuniao.reuniaoId === r.id) {
+        Store.update('leads', lead.id, { reuniao: null });
+      }
+    });
+    C.toast('Reunião excluída.');
   }
 
   function marcarRealizada(r) {
@@ -338,6 +371,11 @@
           canc.onclick = function () { cancelarReuniao(r); };
           acts.append(ok, canc);
         }
+        if (!Auth.owns || Auth.owns(r)) {
+          const del = U.el('<button class="iconbtn" title="Excluir">🗑️</button>');
+          del.onclick = function () { excluirReuniao(r); };
+          acts.appendChild(del);
+        }
       });
     }
     draw();
@@ -351,6 +389,7 @@
     agendarParaLead: agendarParaLead,
     marcarRealizada: marcarRealizada,
     cancelar: cancelarReuniao,
+    excluir: excluirReuniao,
     tipoLabel: function (t) { return TIPO_LABEL[t] || t || '—'; },
     statusLabel: function (s) { return STATUS_LABEL[s] || s || '—'; },
     statusCls: function (s) { return STATUS_CLS[s] || 'st-muted'; }
