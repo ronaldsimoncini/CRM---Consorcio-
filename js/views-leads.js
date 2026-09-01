@@ -67,10 +67,20 @@
     );
     C.modal('Agendar reunião', b, {
       saveLabel: 'Agendar', onSave: function () {
+        const dados = { data: fval(b, 'data'), hora: fval(b, 'hora'), consultorId: fval(b, 'cons'), obs: fval(b, 'obs') };
         Store.batch(function () {
           transitionEtapa(lead, 'reuniao_agendada');
+          /* fluxo unificado: cria/atualiza UM registro em 'reunioes' e sincroniza
+             com o Google Calendar, reaproveitando a lógica do módulo Calendário.
+             O objeto lead.reuniao (JSONB) continua sendo gravado para o cartão do
+             Funil e guarda o id do registro para evitar duplicidade no reagendamento. */
+          let row = null;
+          if (window.Views && Views._reuniao && Views._reuniao.agendarParaLead) {
+            try { row = Views._reuniao.agendarParaLead(lead, dados); }
+            catch (e) { console.error('Falha ao sincronizar reunião do Funil:', e); }
+          }
           Store.update('leads', lead.id, {
-            reuniao: { data: fval(b, 'data'), hora: fval(b, 'hora'), consultorId: fval(b, 'cons'), obs: fval(b, 'obs') }
+            reuniao: Object.assign({}, dados, row && row.id ? { reuniaoId: row.id } : {})
           });
           Store.logHist(lead.id, 'reuniao', 'Reunião agendada para ' + U.fmtDate(fval(b, 'data')) + ' às ' + fval(b, 'hora'), Auth.currentId());
         });

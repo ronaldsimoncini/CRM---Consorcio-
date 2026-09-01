@@ -124,6 +124,69 @@
     C.toast('Reunião cancelada no CRM, mas não foi possível remover do Google Calendar.');
   }
 
+  /* ---------------- integração com o Funil ----------------
+     O Funil (js/views-leads.js) agenda reuniões para um lead. Para NÃO duplicar
+     regras, ele chama agendarParaLead(), que usa exatamente a mesma lógica do
+     "Nova reunião" deste módulo: cria UM registro em 'reunioes', define
+     owner_uid e sincroniza com o Google Calendar. Reagendar o mesmo lead
+     ATUALIZA o registro existente (e o evento no Google) — nunca cria outro. */
+  function somaUmaHora(hhmm) {
+    const m = /^(\d{2}):(\d{2})$/.exec(hhmm || '');
+    if (!m) return hhmm || '';
+    const h = (Number(m[1]) + 1) % 24;
+    return String(h).padStart(2, '0') + ':' + m[2];
+  }
+
+  /* reunião ativa (agendada) já ligada a este lead — por id explícito
+     (lead.reuniao.reuniaoId) ou, para registros antigos, por leadId. */
+  function reuniaoAtivaDoLead(lead) {
+    if (!lead) return null;
+    const rid = lead.reuniao && lead.reuniao.reuniaoId;
+    if (rid) {
+      const r = Store.get('reunioes', rid);
+      if (r && r.status === 'agendada') return r;
+    }
+    return Store.all('reunioes').find(function (r) {
+      return r.leadId === lead.id && r.status === 'agendada';
+    }) || null;
+  }
+
+  function agendarParaLead(lead, dados) {
+    if (!lead) return null;
+    dados = dados || {};
+    const dataISO = dados.data || U.todayISO();
+    const ini = dados.hora || dados.horaInicio || '09:00';
+    const fim = dados.horaFim || somaUmaHora(ini);
+    const campos = {
+      leadId: lead.id,
+      titulo: dados.titulo || ('Reunião: ' + (lead.nome || '')),
+      data: dataISO, horaInicio: ini, horaFim: fim,
+      tipo: 'reuniao',
+      observacoes: dados.obs || dados.observacoes || '',
+      atualizadoEm: U.nowISO()
+    };
+
+    const existente = reuniaoAtivaDoLead(lead);
+    if (existente) {
+      Store.update('reunioes', existente.id, campos);
+      if (existente.googleCalendarEventId) {
+        atualizarNoGoogle(existente.id, campos, lead.id);
+      } else {
+        agendarNoGoogle(Store.get('reunioes', existente.id));
+      }
+      return Store.get('reunioes', existente.id);
+    }
+
+    const ownerUid =
+      (Store.ownerUidFor && dados.consultorId && Store.ownerUidFor(dados.consultorId)) ||
+      (Auth.uid && Auth.uid());
+    const nova = Store.insert('reunioes', Object.assign(
+      { owner_uid: ownerUid, status: 'agendada' }, campos
+    ));
+    agendarNoGoogle(nova);
+    return nova;
+  }
+
   /* ---------------- formulário ---------------- */
   function reuniaoForm(r) {
     const isNew = !r;
@@ -285,6 +348,7 @@
   Views._reuniao = {
     novo: function () { reuniaoForm(null); },
     editar: function (r) { reuniaoForm(r); },
+    agendarParaLead: agendarParaLead,
     marcarRealizada: marcarRealizada,
     cancelar: cancelarReuniao,
     tipoLabel: function (t) { return TIPO_LABEL[t] || t || '—'; },
