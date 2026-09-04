@@ -138,22 +138,32 @@
   }
 
   /* reunião ativa (agendada) já ligada a este lead — por id explícito
-     (lead.reuniao.reuniaoId) ou, para registros antigos, por leadId. */
-  function reuniaoAtivaDoLead(lead) {
+     (ex.: lead.reuniao.reuniaoId ou lead.retomarContato.reuniaoId, recebido
+     em `explicitId`) ou, na falta dele, por leadId + tipo (para não misturar
+     uma reunião comercial normal com um compromisso de "Retomar Contato" do
+     mesmo lead). */
+  function reuniaoAtivaDoLead(lead, tipo, explicitId) {
     if (!lead) return null;
-    const rid = lead.reuniao && lead.reuniao.reuniaoId;
-    if (rid) {
-      const r = Store.get('reunioes', rid);
+    tipo = tipo || 'reuniao';
+    if (explicitId) {
+      const r = Store.get('reunioes', explicitId);
       if (r && r.status === 'agendada') return r;
     }
     return Store.all('reunioes').find(function (r) {
-      return r.leadId === lead.id && r.status === 'agendada';
+      return r.leadId === lead.id && r.status === 'agendada' && (r.tipo || 'reuniao') === tipo;
     }) || null;
   }
 
+  /* dados.tipo (default 'reuniao') e dados.titulo permitem reaproveitar esta
+     mesma função para outros tipos de compromisso ligados a um lead (ex.: o
+     Funil usa tipo:'retorno' para "Retomar Contato") sem duplicar a lógica de
+     criação/atualização/dedupe/Google Calendar. dados.reuniaoIdExistente é o
+     id já conhecido do compromisso (guardado no próprio lead) para reagendar
+     sem risco de pegar o compromisso errado. */
   function agendarParaLead(lead, dados) {
     if (!lead) return null;
     dados = dados || {};
+    const tipo = dados.tipo || 'reuniao';
     const dataISO = dados.data || U.todayISO();
     const ini = dados.hora || dados.horaInicio || '09:00';
     const fim = dados.horaFim || somaUmaHora(ini);
@@ -161,12 +171,12 @@
       leadId: lead.id,
       titulo: dados.titulo || ('Reunião: ' + (lead.nome || '')),
       data: dataISO, horaInicio: ini, horaFim: fim,
-      tipo: 'reuniao',
+      tipo: tipo,
       observacoes: dados.obs || dados.observacoes || '',
       atualizadoEm: U.nowISO()
     };
 
-    const existente = reuniaoAtivaDoLead(lead);
+    const existente = reuniaoAtivaDoLead(lead, tipo, dados.reuniaoIdExistente);
     if (existente) {
       Store.update('reunioes', existente.id, campos);
       if (existente.googleCalendarEventId) {
@@ -285,6 +295,21 @@
     C.toast('Reunião excluída.');
   }
 
+  /* Cancelamento automático (sem diálogo de confirmação): usado quando o
+     próprio sistema precisa desfazer um compromisso em reação a uma mudança
+     de estado do lead (ex.: saiu da etapa "Retomar Contato"). Mesma ação de
+     `cancelarReuniao`, mas silenciosa — não bloqueia nem interrompe o fluxo
+     que a chamou se o Google Calendar falhar. */
+  function cancelarAutomatico(reuniaoId) {
+    if (!reuniaoId) return;
+    const r = Store.get('reunioes', reuniaoId);
+    if (!r || r.status !== 'agendada') return;
+    Store.update('reunioes', reuniaoId, { status: 'cancelada', atualizadoEm: U.nowISO() });
+    if (r.leadId) Store.logHist(r.leadId, 'reuniao_cancelada',
+      'Compromisso cancelado automaticamente: ' + (r.titulo || ''), Auth.currentId());
+    if (r.googleCalendarEventId) removerDoGoogle(reuniaoId);
+  }
+
   function marcarRealizada(r) {
     C.confirm('Marcar a reunião "' + r.titulo + '" como realizada?', function () {
       Store.update('reunioes', r.id, { status: 'realizada', atualizadoEm: U.nowISO() });
@@ -389,6 +414,7 @@
     agendarParaLead: agendarParaLead,
     marcarRealizada: marcarRealizada,
     cancelar: cancelarReuniao,
+    cancelarAutomatico: cancelarAutomatico,
     excluir: excluirReuniao,
     tipoLabel: function (t) { return TIPO_LABEL[t] || t || '—'; },
     statusLabel: function (s) { return STATUS_LABEL[s] || s || '—'; },

@@ -41,7 +41,8 @@ window.Store = (function () {
     { key: 'reuniao_realizada', label: 'REUNIÃO REALIZADA' },
     { key: 'proposta_realizada', label: 'PROPOSTA REALIZADA' },
     { key: 'fechamento', label: 'FECHAMENTO' },
-    { key: 'nao_fez', label: 'NÃO FEZ O CONSÓRCIO' }
+    { key: 'nao_fez', label: 'NÃO FEZ O CONSÓRCIO' },
+    { key: 'retomar_contato', label: 'RETOMAR CONTATO' }
   ];
   const MOTIVOS_PERDA = ['Não teve interesse', 'Valor da parcela', 'Preferiu esperar', 'Não conseguiu aprovação', 'Comprou outra opção', 'Sem retorno', 'Outro'];
   const STATUS_PROPOSTA = ['rascunho', 'enviada', 'em_analise', 'negociacao', 'aprovada', 'recusada', 'cancelada'];

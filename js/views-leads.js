@@ -35,9 +35,25 @@
   function comOwner(rec, ownerUid) { if (ownerUid) rec.owner_uid = ownerUid; return rec; }
 
   /* ---------------- transições de etapa ---------------- */
+  /* Saída da etapa "Retomar Contato": cancela o compromisso vinculado (CRM +
+     Google Calendar) e limpa lead.retomarContato por completo, para que uma
+     eventual volta futura à etapa comece um retorno do zero (sem reaproveitar
+     nem duplicar o compromisso anterior). Chamado de dentro de
+     transitionEtapa() para cobrir TODO caminho de saída da etapa (drag-drop,
+     "Mover etapa", ou qualquer outro formulário que troque a etapa do lead). */
+  function limparRetomarContato(lead) {
+    const rc = lead.retomarContato;
+    if (rc && rc.reuniaoId && window.Views && Views._reuniao && Views._reuniao.cancelarAutomatico) {
+      try { Views._reuniao.cancelarAutomatico(rc.reuniaoId); }
+      catch (e) { console.error('Falha ao cancelar compromisso de Retomar Contato:', e); }
+    }
+    Store.update('leads', lead.id, { retomarContato: null });
+  }
+
   function transitionEtapa(lead, nova) {
     if (lead.etapa === nova) return;
     const de = Store.etapaLabel(lead.etapa), para = Store.etapaLabel(nova);
+    if (lead.etapa === 'retomar_contato') limparRetomarContato(lead);
     Store.update('leads', lead.id, { etapa: nova, atualizadoEm: U.nowISO() });
     Store.logHist(lead.id, 'mudanca_etapa', 'Movido de ' + de + ' para ' + para, Auth.currentId());
   }
@@ -53,6 +69,7 @@
       return H.fecharVendaForm(lead);
     }
     if (nova === 'nao_fez') return H.motivoForm(lead);
+    if (nova === 'retomar_contato') return H.retomarContatoForm(lead);
     transitionEtapa(lead, nova);
     C.toast('Lead movido para ' + Store.etapaLabel(nova));
   }
@@ -87,7 +104,11 @@
              Funil e guarda o id do registro para evitar duplicidade no reagendamento. */
           let row = null;
           if (window.Views && Views._reuniao && Views._reuniao.agendarParaLead) {
-            try { row = Views._reuniao.agendarParaLead(lead, dados); }
+            try {
+              row = Views._reuniao.agendarParaLead(lead, Object.assign({}, dados, {
+                reuniaoIdExistente: (lead.reuniao && lead.reuniao.reuniaoId) || null
+              }));
+            }
             catch (e) { console.error('Falha ao sincronizar reunião do Funil:', e); }
           }
           Store.update('leads', lead.id, {
@@ -96,6 +117,60 @@
           Store.logHist(lead.id, 'reuniao', 'Reunião agendada para ' + U.fmtDate(dataISO) + ' às ' + ini + '–' + fim, Auth.currentId());
         });
         C.toast('Reunião agendada.');
+        if (after) after();
+      }
+    });
+  };
+
+  /* "Retomar Contato": lead com interesse, mas o momento não é adequado agora.
+     NÃO é perda — o lead fica retido nesta etapa até o consultor decidir mover
+     para outra. Mesmo padrão do reuniaoForm acima: cria/atualiza UM compromisso
+     em 'reunioes' (tipo:'retorno', para não se confundir com reunião comercial)
+     e sincroniza com o Google Calendar do consultor responsável, reaproveitando
+     agendarParaLead(). Ao sair da etapa, transitionEtapa() cuida de cancelar
+     este compromisso (ver limparRetomarContato). */
+  H.retomarContatoForm = function (lead, after) {
+    const rc = lead.retomarContato || {};
+    const b = buildForm(
+      C.field('Data para retomar contato', '<input type="date" name="data" value="' + U.esc(rc.data || U.todayISO()) + '">') +
+      C.field('Hora de início', '<input type="time" name="hora" value="' + U.esc(rc.hora || '09:00') + '">') +
+      C.field('Hora de término', '<input type="time" name="horaFim" value="' + U.esc(rc.horaFim || '10:00') + '">') +
+      C.field('Observação', '<textarea name="obs">' + U.esc(rc.obs || '') + '</textarea>', true)
+    );
+    const err = U.el('<div class="login-err" style="margin:6px 0"></div>');
+    b.appendChild(err);
+    C.modal('Retomar contato', b, {
+      saveLabel: 'Confirmar', onSave: function () {
+        err.textContent = '';
+        const dataISO = fval(b, 'data');
+        const ini = fval(b, 'hora'), fim = fval(b, 'horaFim');
+        if (!dataISO) { err.textContent = 'Informe a data para retomar o contato.'; return false; }
+        if (!ini) { err.textContent = 'Informe a hora de início.'; return false; }
+        if (!fim) { err.textContent = 'Informe a hora de término.'; return false; }
+        if (fim <= ini) { err.textContent = 'Horário de término deve ser maior que o horário de início.'; return false; }
+        const obsTxt = fval(b, 'obs');
+        Store.batch(function () {
+          transitionEtapa(lead, 'retomar_contato');
+          let row = null;
+          if (window.Views && Views._reuniao && Views._reuniao.agendarParaLead) {
+            try {
+              row = Views._reuniao.agendarParaLead(lead, {
+                data: dataISO, hora: ini, horaFim: fim, obs: obsTxt,
+                tipo: 'retorno',
+                titulo: 'Retomar contato: ' + (lead.nome || ''),
+                consultorId: lead.consultorId, // agenda do consultor responsável pelo lead, não de quem move o card
+                reuniaoIdExistente: (lead.retomarContato && lead.retomarContato.reuniaoId) || null
+              });
+            } catch (e) { console.error('Falha ao sincronizar Retomar Contato:', e); }
+          }
+          Store.update('leads', lead.id, {
+            retomarContato: { data: dataISO, hora: ini, horaFim: fim, obs: obsTxt, reuniaoId: row && row.id ? row.id : null }
+          });
+          Store.logHist(lead.id, 'retomar_contato',
+            'Retomar contato agendado para ' + U.fmtDate(dataISO) + ' às ' + ini + '–' + fim +
+            (obsTxt ? ' — ' + obsTxt : ''), Auth.currentId());
+        });
+        C.toast('Retorno agendado.');
         if (after) after();
       }
     });
@@ -184,23 +259,27 @@
       saveLabel: 'Registrar venda', onSave: function () {
         const cred = fnum(b, 'cred');
         if (!cred) { alert('Informe o valor do crédito.'); return false; }
+        let vendaCriada = null;
         Store.batch(function () {
           const v = {
             leadId: lead.id, cliente: fval(b, 'cliente') || lead.nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'),
             consultorId: fval(b, 'cons') || lead.consultorId, administradora: fval(b, 'adm'), produtoId: fval(b, 'prod') || null,
             valorCredito: cred, valorParcela: fnum(b, 'parc'), numeroCota: fval(b, 'cota'),
             dataVenda: fval(b, 'data'), origem: lead.origem, indicadorId: lead.indicadorId || null,
+            indicadorUsuarioId: lead.indicadorUsuarioId || null,
             comissao: fnum(b, 'com'), obs: fval(b, 'obs'), status: 'venda_realizada'
           };
           v.metaId = C.metaParaVenda(v);
           comOwner(v, ownerDoLead(lead, v.consultorId));
-          const venda = Store.insert('vendas', v);
+          vendaCriada = Store.insert('vendas', v);
           transitionEtapa(lead, 'fechamento');
-          Store.update('leads', lead.id, { vendaId: venda.id });
+          Store.update('leads', lead.id, { vendaId: vendaCriada.id });
           Store.logHist(lead.id, 'venda', 'Venda registrada: ' + U.brl(cred) +
             (v.metaId ? ' — conta na meta "' + C.nomeMeta(v.metaId) + '"' : ''), Auth.currentId());
         });
         C.toast('Venda registrada! Dashboard, relatórios e metas atualizados.');
+        /* comissão de indicação: sincroniza via RPC (não bloqueia nem altera a venda) */
+        if (window.Views && Views._indicacao && vendaCriada) Views._indicacao.sync(vendaCriada);
         if (after) after();
       }
     });
@@ -295,15 +374,22 @@
       C.field('Observações', '<textarea name="obs">' + U.esc(lead.obs || '') + '</textarea>', true)
     );
 
-    // linha dinâmica "Quem indicou?"
+    // linha dinâmica "Quem indicou?" (indicador EXTERNO — inalterado)
     const row = U.el('<div class="field full indicador-row" style="display:none"><span>Quem indicou esse cliente?</span>' +
       '<div class="inline-pick"><select name="indicador">' + C.opts(inds, lead.indicadorId || '', { blank: '— selecione —' }) + '</select>' +
       '<button type="button" class="btn ghost sm add-ind">+ Novo</button></div></div>');
     b.appendChild(row);
     row.querySelector('.add-ind').onclick = function () { novoIndicadorInline(row.querySelector('select')); };
 
+    // linha dinâmica "Indicado por (funcionário LFT)" — funcionário LFT ativo, só 1
+    const rowU = U.el('<div class="field full indicador-row" style="display:none"><span>Indicado por (funcionário LFT)</span>' +
+      '<select name="indicadorUsuario">' + C.opts(C.usuariosConsultores(), lead.indicadorUsuarioId || '', { blank: '— selecione —' }) + '</select></div>');
+    b.appendChild(rowU);
+
     function sync() {
-      row.style.display = b.querySelector('[name="origem"]').value === 'Indicação' ? 'flex' : 'none';
+      const on = b.querySelector('[name="origem"]').value === 'Indicação';
+      row.style.display = on ? 'flex' : 'none';
+      rowU.style.display = on ? 'flex' : 'none';
     }
     b.querySelector('[name="origem"]').addEventListener('change', sync);
     sync();
@@ -318,10 +404,11 @@
         if (!nome) { alert('Informe ao menos o nome do lead.'); return false; }
         const origem = fval(b, 'origem');
         const indicadorId = origem === 'Indicação' ? (fval(b, 'indicador') || null) : null;
+        const indicadorUsuarioId = origem === 'Indicação' ? (fval(b, 'indicadorUsuario') || null) : null;
         const consId = Auth.isConsultor() ? Auth.currentId() : (fval(b, 'cons') || null);
         const lead = Store.insert('leads', comOwner({
           nome: nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'), email: fval(b, 'email'),
-          cidade: fval(b, 'cidade'), origem: origem, indicadorId: indicadorId, consultorId: consId,
+          cidade: fval(b, 'cidade'), origem: origem, indicadorId: indicadorId, indicadorUsuarioId: indicadorUsuarioId, consultorId: consId,
           obs: fval(b, 'obs'), etapa: 'novo', proximoContato: null, valorCredito: null,
           reuniao: null, proposta: null, motivoPerda: null, vendaId: null, atualizadoEm: U.nowISO()
         }, ownerNovoLead(consId)));
@@ -383,6 +470,7 @@
     if (lead.whatsapp || lead.telefone) wrap.appendChild(U.el('<a class="qa" target="_blank" href="' + U.waLink(lead.whatsapp || lead.telefone) + '">💬 WhatsApp</a>'));
     mk('📝 Registrar contato', function () { H.contatoForm(lead, reopen); });
     mk('📅 Agendar reunião', function () { H.reuniaoForm(lead, reopen); });
+    mk('🔁 Retomar contato', function () { H.retomarContatoForm(lead, reopen); });
     mk('📄 Criar proposta', function () { H.propostaForm(lead, reopen); });
     mk('↔️ Mover etapa', function () { H.moverEtapaForm(lead, reopen); });
     if (lead.etapa !== 'fechamento') mk('✅ Fechar venda', function () { H.fecharVendaForm(lead, reopen); });
@@ -490,6 +578,7 @@
           nome: nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'), email: fval(b, 'email'),
           cidade: fval(b, 'cidade'), origem: origem,
           indicadorId: origem === 'Indicação' ? (fval(b, 'indicador') || null) : null,
+          indicadorUsuarioId: origem === 'Indicação' ? (fval(b, 'indicadorUsuario') || null) : null,
           consultorId: novoConsId,
           obs: fval(b, 'obs'), proximoContato: fval(b, 'prox') || null, atualizadoEm: U.nowISO()
         };
@@ -611,12 +700,24 @@
     return dOk ? d : h;
   }
 
+  /* Mesmo formato de reuniaoLinha(), para lead.retomarContato ({data, hora}). */
+  function retomarContatoLinha(lead) {
+    const r = lead.retomarContato || {};
+    const d = r.data ? U.fmtDate(r.data) : '';
+    const h = r.hora ? String(r.hora).trim() : '';
+    const dOk = d && d !== '—';
+    if (dOk && h) return d + ' às ' + h;
+    return dOk ? d : h;
+  }
+
   /* ---------------- cartão do lead (funil) ---------------- */
   function leadCard(lead) {
     const showReuniao = (lead.etapa === 'reuniao_agendada' || lead.etapa === 'reuniao_realizada') && reuniaoLinha(lead);
+    const showRetomar = lead.etapa === 'retomar_contato' && retomarContatoLinha(lead);
     const card = U.el('<div class="lead-card" tabindex="0">' +
       '<div class="lc-name">' + U.esc(lead.nome) + '</div>' +
       (showReuniao ? '<div class="lc-line muted">📅 ' + U.esc(reuniaoLinha(lead)) + '</div>' : '') +
+      (showRetomar ? '<div class="lc-line muted">🔁 ' + U.esc(retomarContatoLinha(lead)) + '</div>' : '') +
       (lead.telefone ? '<div class="lc-line">📞 ' + U.esc(U.fmtPhone(lead.telefone)) + '</div>' : '') +
       '<div class="lc-line">👤 ' + U.esc(C.nomeUsuario(lead.consultorId)) + '</div>' +
       (lead.valorCredito ? '<div class="lc-line">💰 ' + U.brlShort(lead.valorCredito) + '</div>' : '') +
