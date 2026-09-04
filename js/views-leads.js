@@ -259,27 +259,23 @@
       saveLabel: 'Registrar venda', onSave: function () {
         const cred = fnum(b, 'cred');
         if (!cred) { alert('Informe o valor do crédito.'); return false; }
-        let vendaCriada = null;
         Store.batch(function () {
           const v = {
             leadId: lead.id, cliente: fval(b, 'cliente') || lead.nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'),
             consultorId: fval(b, 'cons') || lead.consultorId, administradora: fval(b, 'adm'), produtoId: fval(b, 'prod') || null,
             valorCredito: cred, valorParcela: fnum(b, 'parc'), numeroCota: fval(b, 'cota'),
             dataVenda: fval(b, 'data'), origem: lead.origem, indicadorId: lead.indicadorId || null,
-            indicadorUsuarioId: lead.indicadorUsuarioId || null,
             comissao: fnum(b, 'com'), obs: fval(b, 'obs'), status: 'venda_realizada'
           };
           v.metaId = C.metaParaVenda(v);
           comOwner(v, ownerDoLead(lead, v.consultorId));
-          vendaCriada = Store.insert('vendas', v);
+          const venda = Store.insert('vendas', v);
           transitionEtapa(lead, 'fechamento');
-          Store.update('leads', lead.id, { vendaId: vendaCriada.id });
+          Store.update('leads', lead.id, { vendaId: venda.id });
           Store.logHist(lead.id, 'venda', 'Venda registrada: ' + U.brl(cred) +
             (v.metaId ? ' — conta na meta "' + C.nomeMeta(v.metaId) + '"' : ''), Auth.currentId());
         });
         C.toast('Venda registrada! Dashboard, relatórios e metas atualizados.');
-        /* comissão de indicação: sincroniza via RPC (não bloqueia nem altera a venda) */
-        if (window.Views && Views._indicacao && vendaCriada) Views._indicacao.sync(vendaCriada);
         if (after) after();
       }
     });
@@ -374,22 +370,15 @@
       C.field('Observações', '<textarea name="obs">' + U.esc(lead.obs || '') + '</textarea>', true)
     );
 
-    // linha dinâmica "Quem indicou?" (indicador EXTERNO — inalterado)
+    // linha dinâmica "Quem indicou?"
     const row = U.el('<div class="field full indicador-row" style="display:none"><span>Quem indicou esse cliente?</span>' +
       '<div class="inline-pick"><select name="indicador">' + C.opts(inds, lead.indicadorId || '', { blank: '— selecione —' }) + '</select>' +
       '<button type="button" class="btn ghost sm add-ind">+ Novo</button></div></div>');
     b.appendChild(row);
     row.querySelector('.add-ind').onclick = function () { novoIndicadorInline(row.querySelector('select')); };
 
-    // linha dinâmica "Indicado por (funcionário LFT)" — funcionário LFT ativo, só 1
-    const rowU = U.el('<div class="field full indicador-row" style="display:none"><span>Indicado por (funcionário LFT)</span>' +
-      '<select name="indicadorUsuario">' + C.opts(C.usuariosConsultores(), lead.indicadorUsuarioId || '', { blank: '— selecione —' }) + '</select></div>');
-    b.appendChild(rowU);
-
     function sync() {
-      const on = b.querySelector('[name="origem"]').value === 'Indicação';
-      row.style.display = on ? 'flex' : 'none';
-      rowU.style.display = on ? 'flex' : 'none';
+      row.style.display = b.querySelector('[name="origem"]').value === 'Indicação' ? 'flex' : 'none';
     }
     b.querySelector('[name="origem"]').addEventListener('change', sync);
     sync();
@@ -404,11 +393,10 @@
         if (!nome) { alert('Informe ao menos o nome do lead.'); return false; }
         const origem = fval(b, 'origem');
         const indicadorId = origem === 'Indicação' ? (fval(b, 'indicador') || null) : null;
-        const indicadorUsuarioId = origem === 'Indicação' ? (fval(b, 'indicadorUsuario') || null) : null;
         const consId = Auth.isConsultor() ? Auth.currentId() : (fval(b, 'cons') || null);
         const lead = Store.insert('leads', comOwner({
           nome: nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'), email: fval(b, 'email'),
-          cidade: fval(b, 'cidade'), origem: origem, indicadorId: indicadorId, indicadorUsuarioId: indicadorUsuarioId, consultorId: consId,
+          cidade: fval(b, 'cidade'), origem: origem, indicadorId: indicadorId, consultorId: consId,
           obs: fval(b, 'obs'), etapa: 'novo', proximoContato: null, valorCredito: null,
           reuniao: null, proposta: null, motivoPerda: null, vendaId: null, atualizadoEm: U.nowISO()
         }, ownerNovoLead(consId)));
@@ -578,7 +566,6 @@
           nome: nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'), email: fval(b, 'email'),
           cidade: fval(b, 'cidade'), origem: origem,
           indicadorId: origem === 'Indicação' ? (fval(b, 'indicador') || null) : null,
-          indicadorUsuarioId: origem === 'Indicação' ? (fval(b, 'indicadorUsuario') || null) : null,
           consultorId: novoConsId,
           obs: fval(b, 'obs'), proximoContato: fval(b, 'prox') || null, atualizadoEm: U.nowISO()
         };
