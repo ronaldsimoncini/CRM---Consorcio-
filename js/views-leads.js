@@ -367,6 +367,10 @@
       C.field('Cidade', '<input name="cidade" value="' + U.esc(lead.cidade || '') + '">') +
       C.field('De onde veio esse lead?', '<select name="origem">' + C.opts(Store.config().origens, lead.origem || '', { blank: '—' }) + '</select>') +
       C.field('Consultor responsável', '<select name="cons"' + (Auth.isConsultor() ? ' disabled' : '') + '>' + C.opts(C.usuariosConsultores(), meuId, { blank: '—' }) + '</select>') +
+      /* Qualificação do Lead — classificação SEMPRE manual, nunca obrigatória; sem regra automática */
+      C.field('Qualificação do Lead', '<select name="qualificacao">' +
+        C.opts(Store.qualificacoes().map(function (q) { return { value: q.key, label: q.label }; }), lead.qualificacao || '', { blank: '— Sem classificação —' }) +
+        '</select>') +
       C.field('Observações', '<textarea name="obs">' + U.esc(lead.obs || '') + '</textarea>', true)
     );
 
@@ -398,6 +402,7 @@
           nome: nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'), email: fval(b, 'email'),
           cidade: fval(b, 'cidade'), origem: origem, indicadorId: indicadorId, consultorId: consId,
           obs: fval(b, 'obs'), etapa: 'novo', proximoContato: null, valorCredito: null,
+          qualificacao: fval(b, 'qualificacao') || null,
           reuniao: null, proposta: null, motivoPerda: null, vendaId: null, atualizadoEm: U.nowISO()
         }, ownerNovoLead(consId)));
         Store.logHist(lead.id, 'cadastro',
@@ -422,6 +427,7 @@
       C.chip(st.label, st.cls) + ' ' +
       (lead.origem ? C.chip(lead.origem, 'st-muted') : '') + ' ' +
       (lead.indicadorId ? C.chip('Indicado por: ' + C.nomeIndicador(lead.indicadorId), 'st-muted') : '') +
+      (Store.qualificacaoInfo(lead.qualificacao) ? C.chip(Store.qualificacaoInfo(lead.qualificacao).label, Store.qualificacaoInfo(lead.qualificacao).cls) : '') +
       '</div>'
     ));
 
@@ -567,7 +573,8 @@
           cidade: fval(b, 'cidade'), origem: origem,
           indicadorId: origem === 'Indicação' ? (fval(b, 'indicador') || null) : null,
           consultorId: novoConsId,
-          obs: fval(b, 'obs'), proximoContato: fval(b, 'prox') || null, atualizadoEm: U.nowISO()
+          obs: fval(b, 'obs'), proximoContato: fval(b, 'prox') || null,
+          qualificacao: fval(b, 'qualificacao') || null, atualizadoEm: U.nowISO()
         };
         /* reatribuição: o dono (owner_uid) acompanha o novo consultor, se ele já tiver login */
         const reatribuido = !Auth.isConsultor() && novoConsId !== lead.consultorId;
@@ -701,7 +708,9 @@
   function leadCard(lead) {
     const showReuniao = (lead.etapa === 'reuniao_agendada' || lead.etapa === 'reuniao_realizada') && reuniaoLinha(lead);
     const showRetomar = lead.etapa === 'retomar_contato' && retomarContatoLinha(lead);
-    const card = U.el('<div class="lead-card" tabindex="0">' +
+    /* Qualificação do Lead (🔴🟠🔵) — só um indicador visual (borda colorida); classificação sempre manual */
+    const qi = Store.qualificacaoInfo(lead.qualificacao);
+    const card = U.el('<div class="lead-card' + (qi ? ' ' + qi.cls : '') + '" tabindex="0">' +
       '<div class="lc-name">' + U.esc(lead.nome) + '</div>' +
       (showReuniao ? '<div class="lc-line muted">📅 ' + U.esc(reuniaoLinha(lead)) + '</div>' : '') +
       (showRetomar ? '<div class="lc-line muted">🔁 ' + U.esc(retomarContatoLinha(lead)) + '</div>' : '') +
@@ -818,6 +827,9 @@
       '<select id="f-cons"><option value="">Consultor: todos</option>' + C.opts(C.usuariosConsultores(), '') + '</select>' +
       '<select id="f-etapa"><option value="">Etapa: todas</option>' + C.opts(Store.etapas().map(function (e) { return { value: e.key, label: e.label }; }), '') + '</select>' +
       '<select id="f-status"><option value="">Status: todos</option><option value="atend">Em atendimento</option><option value="cliente">Cliente</option><option value="perdido">Não realizado</option></select>' +
+      '<select id="f-qualif"><option value="">Qualificação: todas</option>' +
+      C.opts(Store.qualificacoes().map(function (q) { return { value: q.key, label: q.label }; }), '') +
+      '<option value="__sem__">Sem classificação</option></select>' +
       '<input id="f-cidade" placeholder="Cidade">' +
       '<input id="f-de" type="date" title="Entrada de"><input id="f-ate" type="date" title="Entrada até">' +
       '</div>');
@@ -840,7 +852,8 @@
       const fo = f.querySelector('#f-origem').value, fi = f.querySelector('#f-ind').value,
         fc = f.querySelector('#f-cons').value, fe = f.querySelector('#f-etapa').value,
         fs = f.querySelector('#f-status').value, fcid = f.querySelector('#f-cidade').value.toLowerCase().trim(),
-        fde = f.querySelector('#f-de').value, fate = f.querySelector('#f-ate').value;
+        fde = f.querySelector('#f-de').value, fate = f.querySelector('#f-ate').value,
+        fq = f.querySelector('#f-qualif').value;
 
       const rows = scopedLeads().filter(function (l) {
         if (fbusca && normalizarBusca(l.nome).indexOf(fbusca) < 0) return false;
@@ -848,6 +861,8 @@
         if (fi && l.indicadorId !== fi) return false;
         if (fc && l.consultorId !== fc) return false;
         if (fe && l.etapa !== fe) return false;
+        if (fq === '__sem__' && l.qualificacao) return false;
+        if (fq && fq !== '__sem__' && l.qualificacao !== fq) return false;
         if (fcid && (l.cidade || '').toLowerCase().indexOf(fcid) < 0) return false;
         const d = (l.criadoEm || '').slice(0, 10);
         if (fde && d < fde) return false;
@@ -863,12 +878,14 @@
 
       tableWrap.innerHTML =
         '<table class="table"><thead><tr><th>Nome</th><th>Telefone</th><th>Origem</th><th>Indicado por</th>' +
-        '<th>Consultor</th><th>Etapa</th><th>Cidade</th><th>Entrada</th><th>Status</th></tr></thead><tbody>' +
+        '<th>Consultor</th><th>Etapa</th><th>Qualificação</th><th>Cidade</th><th>Entrada</th><th>Status</th></tr></thead><tbody>' +
         rows.map(function (l) {
           const s = statusLead(l);
+          const qi = Store.qualificacaoInfo(l.qualificacao);
           return '<tr data-id="' + l.id + '"><td>' + U.esc(l.nome) + '</td><td>' + U.esc(U.fmtPhone(l.telefone)) + '</td>' +
             '<td>' + U.esc(l.origem || '—') + '</td><td>' + (l.indicadorId ? U.esc(C.nomeIndicador(l.indicadorId)) : '—') + '</td>' +
             '<td>' + U.esc(C.nomeUsuario(l.consultorId)) + '</td><td>' + Store.etapaLabel(l.etapa) + '</td>' +
+            '<td>' + (qi ? C.chip(qi.label, qi.cls) : '—') + '</td>' +
             '<td>' + U.esc(l.cidade || '—') + '</td><td>' + U.fmtDate(l.criadoEm) + '</td>' +
             '<td>' + C.chip(s.label, s.cls) + '</td></tr>';
         }).join('') +

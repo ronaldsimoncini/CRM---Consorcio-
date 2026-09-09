@@ -44,6 +44,14 @@ window.Store = (function () {
     { key: 'nao_fez', label: 'NÃO FEZ O CONSÓRCIO' },
     { key: 'retomar_contato', label: 'RETOMAR CONTATO' }
   ];
+  /* Qualificação do Lead — classificação SEMPRE manual (nenhuma regra automática
+     define/altera este campo). Exatamente 3 níveis; lead pode ficar sem nenhum
+     (chave ausente/null). Guardado em leads.data.qualificacao. */
+  const QUALIFICACOES = [
+    { key: 'quente', label: '🔴 Lead quente', cls: 'ql-quente' },
+    { key: 'morno', label: '🟠 Lead morno', cls: 'ql-morno' },
+    { key: 'futuro', label: '🔵 Lead futuro', cls: 'ql-futuro' }
+  ];
   const MOTIVOS_PERDA = ['Não teve interesse', 'Valor da parcela', 'Preferiu esperar', 'Não conseguiu aprovação', 'Comprou outra opção', 'Sem retorno', 'Outro'];
   const STATUS_PROPOSTA = ['rascunho', 'enviada', 'em_analise', 'negociacao', 'aprovada', 'recusada', 'cancelada'];
   const LABEL_PROPOSTA = {
@@ -373,8 +381,11 @@ window.Store = (function () {
   function config() { return data.config; }
   function etapas() { return ETAPAS.slice(); }
   function etapaLabel(key) { const e = ETAPAS.find(function (x) { return x.key === key; }); return e ? e.label : key; }
+  function qualificacoes() { return QUALIFICACOES.slice(); }
+  function qualificacaoInfo(key) { return QUALIFICACOES.find(function (x) { return x.key === key; }) || null; }
+  function qualificacaoLabel(key) { const q = qualificacaoInfo(key); return q ? q.label : ''; }
   function constants() {
-    return { ETAPAS: ETAPAS, MOTIVOS_PERDA: MOTIVOS_PERDA, STATUS_PROPOSTA: STATUS_PROPOSTA, LABEL_PROPOSTA: LABEL_PROPOSTA };
+    return { ETAPAS: ETAPAS, QUALIFICACOES: QUALIFICACOES, MOTIVOS_PERDA: MOTIVOS_PERDA, STATUS_PROPOSTA: STATUS_PROPOSTA, LABEL_PROPOSTA: LABEL_PROPOSTA };
   }
 
   /* ---------- escrita (retorno síncrono; cache antes do servidor) ---------- */
@@ -507,7 +518,8 @@ window.Store = (function () {
   }, 0);
 
   return {
-    all: all, get: get, config: config, etapas: etapas, etapaLabel: etapaLabel, constants: constants,
+    all: all, get: get, config: config, etapas: etapas, etapaLabel: etapaLabel,
+    qualificacoes: qualificacoes, qualificacaoLabel: qualificacaoLabel, qualificacaoInfo: qualificacaoInfo, constants: constants,
     insert: insert, update: update, remove: remove, setConfig: setConfig,
     logHist: logHist, historyOf: historyOf, subscribe: subscribe, batch: batch,
     resetAll: resetAll, loadDemo: loadDemo, _data: function () { return data; },

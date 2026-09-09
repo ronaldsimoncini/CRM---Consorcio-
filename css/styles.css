@@ -93,6 +93,11 @@ a{color:var(--accent)}
 .chip.st-warn{background:#FBF0DA;color:#8A5B12}
 .chip.st-muted{background:#EEF1F6;color:#6B7280}
 
+/* Qualificação do Lead — classificação manual (🔴 quente / 🟠 morno / 🔵 futuro) */
+.chip.ql-quente{background:#FBE4E4;color:#B23434}
+.chip.ql-morno{background:#FDEBD8;color:#B5620A}
+.chip.ql-futuro{background:#E1EEFB;color:#1D5FA3}
+
 /* ---------- KPIs ---------- */
 .kpi-row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
 .kpi-row.wide{grid-template-columns:repeat(6,1fr)}
@@ -144,9 +149,13 @@ a{color:var(--accent)}
 .kanban-col-head{display:flex;justify-content:space-between;align-items:center;padding:12px 12px 8px;font-weight:700;font-size:12px;letter-spacing:.02em}
 .kanban-col-head .cnt{font-weight:600;color:var(--muted);font-size:11px}
 .kanban-list{padding:0 10px 10px;overflow-y:auto;display:flex;flex-direction:column;gap:9px;min-height:40px}
-.lead-card{position:relative;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;padding-right:34px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.lead-card{position:relative;background:#fff;border:1px solid var(--line);border-left:4px solid var(--line);border-radius:10px;padding:10px;padding-right:34px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .lead-card:hover{border-color:var(--accent)}
 .lead-card.dragging{opacity:.45}
+/* Qualificação do Lead: só a borda esquerda muda de cor, pra dar pra ler a coluna inteira num relance */
+.lead-card.ql-quente{border-left-color:#D64545}
+.lead-card.ql-morno{border-left-color:#E08A2B}
+.lead-card.ql-futuro{border-left-color:#2F7BD1}
 .lc-move{position:absolute;top:6px;right:6px;width:26px;height:26px;border:1px solid var(--line);background:#fff;
   border-radius:7px;cursor:pointer;font-size:14px;line-height:1;color:var(--text-soft)}
 .lc-move:hover{background:var(--bg);border-color:var(--accent);color:var(--brand)}
