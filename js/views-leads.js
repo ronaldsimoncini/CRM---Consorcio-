@@ -780,6 +780,7 @@
     container.appendChild(head);
 
     const f = U.el('<div class="filters">' +
+      '<input id="f-busca" placeholder="Pesquisar cliente...">' +
       '<select id="f-origem"><option value="">Origem: todas</option>' + C.opts(Store.config().origens, '') + '</select>' +
       '<select id="f-ind" style="display:none"><option value="">Indicado por: todos</option>' +
       C.opts(Store.all('indicadores').map(function (i) { return { value: i.id, label: i.nome }; }), '') + '</select>' +
@@ -797,14 +798,21 @@
       f.querySelector('#f-ind').style.display = f.querySelector('#f-origem').value === 'Indicação' ? '' : 'none';
     }
 
+    /* minúsculas + sem acento, para a busca por nome ignorar caixa e acentuação */
+    function normalizarBusca(s) {
+      return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    }
+
     function draw() {
       syncIndFilter();
+      const fbusca = normalizarBusca(f.querySelector('#f-busca').value.trim());
       const fo = f.querySelector('#f-origem').value, fi = f.querySelector('#f-ind').value,
         fc = f.querySelector('#f-cons').value, fe = f.querySelector('#f-etapa').value,
         fs = f.querySelector('#f-status').value, fcid = f.querySelector('#f-cidade').value.toLowerCase().trim(),
         fde = f.querySelector('#f-de').value, fate = f.querySelector('#f-ate').value;
 
       const rows = scopedLeads().filter(function (l) {
+        if (fbusca && normalizarBusca(l.nome).indexOf(fbusca) < 0) return false;
         if (fo && l.origem !== fo) return false;
         if (fi && l.indicadorId !== fi) return false;
         if (fc && l.consultorId !== fc) return false;
@@ -820,7 +828,7 @@
           if (fs === 'atend' && !(s.label === 'Em atendimento' || s.label === 'Novo')) return false;
         }
         return true;
-      }).sort(function (a, b) { return (b.criadoEm || '') < (a.criadoEm || '') ? -1 : 1; });
+      }).sort(function (a, b) { return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }); });
 
       tableWrap.innerHTML =
         '<table class="table"><thead><tr><th>Nome</th><th>Telefone</th><th>Origem</th><th>Indicado por</th>' +
