@@ -750,7 +750,7 @@
         '<div class="kanban-list"></div></div>');
       const list = col.querySelector('.kanban-list');
       const arr = leads.filter(function (l) { return l.etapa === et.key; })
-        .sort(function (a, b) { return (b.atualizadoEm || b.criadoEm || '') < (a.atualizadoEm || a.criadoEm || '') ? -1 : 1; });
+        .sort(function (a, b) { return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }); });
       col.querySelector('.cnt').textContent = arr.length + (arr.length === 1 ? ' lead' : ' leads');
       arr.forEach(function (l) { list.appendChild(leadCard(l)); });
 
