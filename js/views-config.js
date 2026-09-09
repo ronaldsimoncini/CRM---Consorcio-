@@ -251,6 +251,43 @@
       .map(function (m) { return { value: m.id, label: m.nome }; }), sel, { blank: 'Meta ativa da equipe (automática)' });
   }
 
+  /* ---------- sincronização com public.painel_tokens ----------
+     config.data.painelTokens continua sendo a fonte que esta tela lê/edita;
+     estas duas funções só espelham a operação na tabela que o painel
+     PUBLICADO realmente consulta (via painel_meta(), api/painel.js), para
+     não depender mais de um INSERT manual no SQL Editor (ver DEPLOY.md).
+     Best-effort: nunca desfaz nem bloqueia a operação local (mesmo padrão
+     do sync com o Google Calendar em js/views-reunioes.js) — RLS própria da
+     tabela (`tokens_admin`, is_admin()) já libera o admin logado a
+     escrever direto com o cliente comum, sem service role no frontend. */
+  function syncPainelToken(t) {
+    const c = (window.Auth && typeof Auth.client === 'function') ? Auth.client() : null;
+    if (!c) { C.toast('TV salva no CRM, mas sem conexão para sincronizar com o Painel publicado.'); return; }
+    c.from('painel_tokens').upsert({ token: t.token, nome: t.nome, meta_id: t.metaId || null }, { onConflict: 'token' })
+      .then(function (res) {
+        if (res && res.error) {
+          console.error('Falha ao sincronizar TV com painel_tokens:', res.error);
+          C.toast('TV salva no CRM, mas não foi possível sincronizar com o Painel publicado.');
+        }
+      }, function (err) {
+        console.error('Falha de rede ao sincronizar TV com painel_tokens:', err);
+        C.toast('TV salva no CRM, mas não foi possível sincronizar com o Painel publicado.');
+      });
+  }
+  function removePainelToken(token) {
+    const c = (window.Auth && typeof Auth.client === 'function') ? Auth.client() : null;
+    if (!c) { C.toast('TV removida no CRM, mas sem conexão para sincronizar com o Painel publicado.'); return; }
+    c.from('painel_tokens').delete().eq('token', token).then(function (res) {
+      if (res && res.error) {
+        console.error('Falha ao remover TV de painel_tokens:', res.error);
+        C.toast('TV removida no CRM, mas não foi possível remover do Painel publicado.');
+      }
+    }, function (err) {
+      console.error('Falha de rede ao remover TV de painel_tokens:', err);
+      C.toast('TV removida no CRM, mas não foi possível remover do Painel publicado.');
+    });
+  }
+
   function painelTvTab(pane) {
     pane.appendChild(U.el('<div class="card"><h3 class="card-title">📺 Painel de Metas para TV</h3>' +
       '<div class="muted">Tela cheia com META / VENDIDO / % / FALTA e gráfico de evolução, para exibir numa televisão. ' +
@@ -264,9 +301,11 @@
     add.querySelector('#ad').onclick = function () {
       const nome = add.querySelector('#nv').value.trim();
       if (!nome) { alert('Dê um nome para a TV.'); return; }
-      const lista = (Store.config().painelTokens || []).concat([{ token: genToken(nome), nome: nome, metaId: add.querySelector('#mt').value || null }]);
+      const novaTv = { token: genToken(nome), nome: nome, metaId: add.querySelector('#mt').value || null };
+      const lista = (Store.config().painelTokens || []).concat([novaTv]);
       Store.setConfig({ painelTokens: lista });
       C.toast('TV adicionada.');
+      syncPainelToken(novaTv);
     };
 
     const lista = Store.config().painelTokens || [];
@@ -294,11 +333,13 @@
         C.modal('Editar TV', b, {
           saveLabel: 'Salvar', onSave: function () {
             const nome = fval(b, 'nome'); if (!nome) { alert('Informe o nome.'); return false; }
+            const tvEditada = { token: t.token, nome: nome, metaId: fval(b, 'mt') || null };
             Store.setConfig({
               painelTokens: (Store.config().painelTokens || []).map(function (x) {
-                return x.token === t.token ? { token: x.token, nome: nome, metaId: fval(b, 'mt') || null } : x;
+                return x.token === t.token ? tvEditada : x;
               })
             });
+            syncPainelToken(tvEditada);
           }
         });
       };
@@ -306,6 +347,7 @@
       del.onclick = function () {
         C.confirm('Remover a TV "' + t.nome + '"? O link dela deixa de funcionar.', function () {
           Store.setConfig({ painelTokens: (Store.config().painelTokens || []).filter(function (x) { return x.token !== t.token; }) });
+          removePainelToken(t.token);
         });
       };
       acts.append(open, copy, edit, del);
