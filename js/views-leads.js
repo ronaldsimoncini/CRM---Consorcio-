@@ -742,6 +742,16 @@
     }
     container.appendChild(head);
 
+    /* minúsculas + sem acento, para a busca ignorar caixa e acentuação (local a esta view) */
+    function normalizarBusca(s) {
+      return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    }
+
+    const bar = U.el('<div class="filters"><input id="f-funil-busca" placeholder="Pesquisar cliente...">' +
+      '</div>');
+    container.appendChild(bar);
+    const buscaInput = bar.querySelector('#f-funil-busca');
+
     const leads = scopedLeads();
     const board = U.el('<div class="kanban"></div>');
     Store.etapas().forEach(function (et) {
@@ -752,7 +762,11 @@
       const arr = leads.filter(function (l) { return l.etapa === et.key; })
         .sort(function (a, b) { return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }); });
       col.querySelector('.cnt').textContent = arr.length + (arr.length === 1 ? ' lead' : ' leads');
-      arr.forEach(function (l) { list.appendChild(leadCard(l)); });
+      arr.forEach(function (l) {
+        const card = leadCard(l);
+        card.dataset.nome = normalizarBusca(l.nome);
+        list.appendChild(card);
+      });
 
       if (Auth.canEdit()) {
         col.addEventListener('dragover', function (e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drop'); });
@@ -767,6 +781,23 @@
     });
     container.appendChild(board);
     container.appendChild(U.el('<div class="muted">Arraste os cartões entre as colunas para mudar a etapa. No celular, abra o cartão e use "Mover etapa".</div>'));
+
+    /* pesquisa em tempo real: só mostra/esconde cards já renderizados (não refaz colunas,
+       não mexe em etapa/drag-and-drop/ordenação) e atualiza a contagem visível de cada coluna */
+    function filtrarPorNome() {
+      const termo = normalizarBusca(buscaInput.value.trim());
+      board.querySelectorAll('.kanban-col').forEach(function (col) {
+        let visiveis = 0;
+        col.querySelectorAll('.lead-card').forEach(function (card) {
+          const ok = !termo || (card.dataset.nome || '').indexOf(termo) >= 0;
+          card.style.display = ok ? '' : 'none';
+          if (ok) visiveis++;
+        });
+        col.querySelector('.cnt').textContent = visiveis + (visiveis === 1 ? ' lead' : ' leads');
+      });
+    }
+    buscaInput.addEventListener('keyup', filtrarPorNome);
+    buscaInput.addEventListener('change', filtrarPorNome);
   };
 
   /* ================= VIEW: LEADS (lista) ================= */
