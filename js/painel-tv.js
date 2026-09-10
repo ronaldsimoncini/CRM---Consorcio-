@@ -100,88 +100,26 @@
     };
   }
 
-  /* ---------- gráfico de linha (SVG) ---------- */
-  function chartSVG(agg) {
-    const W = 1000, Hh = 460, padL = 12, padR = 14, padT = 24, padB = 40;
-    const di = dateFromISO(agg.meta.dataInicio).getTime();
-    const df = dateFromISO(agg.meta.dataFim).getTime();
-    const now = Math.min(Date.now(), df);
-    const span = Math.max(df - di, DAY);
-    const yMax = Math.max(agg.meta.valorMeta, agg.vendido) * 1.08 || 1;
-
-    const X = function (t) { return padL + (clamp(t, di, df) - di) / span * (W - padL - padR); };
-    const Y = function (v) { return Hh - padB - (v / yMax) * (Hh - padT - padB); };
-
-    // linha acumulada (parada em "hoje")
-    let pts = agg.timeline.map(function (p) { return [X(dateFromISO(p.d).getTime()), Y(p.acc)]; });
-    const lastAcc = agg.timeline.length ? agg.timeline[agg.timeline.length - 1].acc : 0;
-    pts.push([X(now), Y(lastAcc)]);
-    const poly = pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ');
-    const area = 'M ' + poly.split(' ').join(' L ') + ' L ' + X(now).toFixed(1) + ',' + Y(0).toFixed(1) + ' L ' + X(di).toFixed(1) + ',' + Y(0).toFixed(1) + ' Z';
-
-    // ticks Y
-    let yTicks = '';
-    for (let i = 0; i <= 4; i++) {
-      const v = yMax * i / 4, y = Y(v);
-      yTicks += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) + '" stroke="rgba(255,255,255,.10)"/>' +
-        '<text x="' + padL + '" y="' + (y - 6).toFixed(1) + '" fill="#9FB4CC" font-size="15">' + shortBRL(v) + '</text>';
-    }
-    // ticks X
-    let xTicks = '';
-    for (let i = 0; i <= 4; i++) {
-      const t = di + span * i / 4, x = X(t);
-      xTicks += '<text x="' + x.toFixed(1) + '" y="' + (Hh - 12) + '" fill="#9FB4CC" font-size="15" text-anchor="middle">' + fmtDMY(iso(new Date(t))).slice(0, 5) + '</text>';
-    }
-
-    const yMeta = Y(agg.meta.valorMeta);
-    const xNow = X(now);
-
-    return '<svg viewBox="0 0 ' + W + ' ' + Hh + '" preserveAspectRatio="xMidYMid meet">' +
-      '<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">' +
-      '<stop offset="0" stop-color="#37D07A" stop-opacity=".35"/><stop offset="1" stop-color="#37D07A" stop-opacity="0"/></linearGradient></defs>' +
-      yTicks + xTicks +
-      '<path d="' + area + '" fill="url(#g)"/>' +
-      '<polyline points="' + poly + '" fill="none" stroke="#37D07A" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>' +
-      '<line x1="' + padL + '" y1="' + yMeta.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + yMeta.toFixed(1) + '" stroke="#E7B961" stroke-width="2.5" stroke-dasharray="10 8"/>' +
-      '<text x="' + (W - padR) + '" y="' + (yMeta - 10).toFixed(1) + '" fill="#E7B961" font-size="17" font-weight="700" text-anchor="end">META ' + brl(agg.meta.valorMeta) + '</text>' +
-      '<line x1="' + xNow.toFixed(1) + '" y1="' + padT + '" x2="' + xNow.toFixed(1) + '" y2="' + (Hh - padB) + '" stroke="rgba(255,255,255,.35)" stroke-width="1.5" stroke-dasharray="3 5"/>' +
-      '<circle cx="' + xNow.toFixed(1) + '" cy="' + Y(lastAcc).toFixed(1) + '" r="7" fill="#37D07A" stroke="#0A1A2F" stroke-width="3"/>' +
-      '</svg>';
-  }
-  function shortBRL(v) {
-    if (v >= 1e6) return 'R$ ' + (v / 1e6).toFixed(1).replace('.', ',') + ' mi';
-    if (v >= 1e3) return 'R$ ' + Math.round(v / 1e3) + ' mil';
-    return 'R$ ' + Math.round(v);
-  }
-
   /* ---------- render ---------- */
-  const STATUS_TXT = { em_andamento: 'META EM ANDAMENTO', atingida: 'META ATINGIDA 🎉', superada: 'META SUPERADA 🚀', sem_meta: '—' };
 
   function layoutHTML(agg) {
     return '' +
       '<div class="pt-top">' +
-      '<div class="pt-emp">' + esc(agg.empresa) + '<small>PAINEL DE METAS</small></div>' +
-      '<div style="text-align:right"><div class="pt-clock" id="pt-clock">--:--</div>' +
-      '<div class="pt-meta-nome" id="meta-nome">' + esc(agg.meta.nome) + '</div></div>' +
+        '<div class="pt-brand">' + esc(agg.empresa) + '<span>PAINEL DE METAS</span></div>' +
+        '<div class="pt-clock" id="pt-clock">--:--</div>' +
       '</div>' +
-      '<div class="pt-body">' +
-      '<div class="pt-stats">' +
-      stat('meta', '🎯 META', 's-meta') +
-      stat('vendido', '💰 VENDIDO', 's-vendido') +
-      stat('pct', '📊 META ATINGIDA', 's-pct') +
-      stat('falta', '💵 FALTA PARA A META', 's-falta') +
-      '<div class="pt-prog"><div class="pt-prog-track"><div class="pt-prog-fill" id="prog-fill" style="width:0%"></div></div></div>' +
-      '</div>' +
-      '<div class="pt-chart"><h2>EVOLUÇÃO DAS VENDAS</h2><div id="chart"></div></div>' +
-      '</div>' +
-      '<div class="pt-foot">' +
-      '<div class="pt-badge status" id="b-status"><div class="lb">STATUS</div><div class="vl">—</div></div>' +
-      '<div class="pt-badge ritmo" id="b-ritmo"><div class="lb">RITMO</div><div class="vl">—</div></div>' +
-      '<div class="pt-badge" id="b-prazo"><div class="lb">PERÍODO</div><div class="vl">—</div></div>' +
+      '<div class="pt-stage">' +
+        '<div class="pt-realizado">' +
+          '<div class="pt-k">REALIZADO</div>' +
+          '<div class="pt-realizado-vl" id="s-vendido">R$ 0</div>' +
+        '</div>' +
+        '<div class="pt-meta">' +
+          '<div class="pt-k">META DO MÊS</div>' +
+          '<div class="pt-meta-vl" id="s-meta">R$ 0</div>' +
+        '</div>' +
+        '<div class="pt-bar"><div class="pt-bar-fill" id="prog-fill" style="width:0%"></div></div>' +
+        '<div class="pt-periodo" id="pt-periodo">—</div>' +
       '</div>';
-  }
-  function stat(cls, lb, id) {
-    return '<div class="pt-stat ' + cls + '"><div class="lb">' + lb + '</div><div class="vl" id="' + id + '">R$ 0</div></div>';
   }
 
   function animateNumber(el, from, to, fmt) {
@@ -218,25 +156,8 @@
 
     document.getElementById('s-meta').textContent = brl(agg.meta.valorMeta);
     animateNumber(document.getElementById('s-vendido'), STATE.shown.vendido, agg.vendido, brl);
-    animateNumber(document.getElementById('s-pct'), STATE.shown.pct, agg.percentual, function (v) { return v.toFixed(0) + '%'; });
-    animateNumber(document.getElementById('s-falta'), STATE.shown.restante, agg.restante, brl);
     document.getElementById('prog-fill').style.width = clamp(agg.percentual, 0, 100) + '%';
-    document.getElementById('chart').innerHTML = chartSVG(agg);
-    document.getElementById('meta-nome').textContent = agg.meta.nome;
-
-    const bs = document.getElementById('b-status');
-    bs.className = 'pt-badge status ' + agg.status;
-    bs.querySelector('.vl').textContent = STATUS_TXT[agg.status] || '—';
-
-    const br = document.getElementById('b-ritmo');
-    br.className = 'pt-badge ritmo ' + (agg.ritmo.acima ? 'acima' : 'abaixo');
-    br.querySelector('.vl').textContent = agg.status !== 'em_andamento'
-      ? '—'
-      : (agg.ritmo.acima ? 'ACIMA do necessário' : 'ABAIXO do necessário');
-
-    const bp = document.getElementById('b-prazo');
-    bp.querySelector('.vl').textContent = fmtDMY(agg.meta.dataInicio) + ' – ' + fmtDMY(agg.meta.dataFim) +
-      (agg.ritmo.diasRestantes ? '  ·  ' + agg.ritmo.diasRestantes + ' dias' : '');
+    document.getElementById('pt-periodo').textContent = fmtDMY(agg.meta.dataInicio) + ' – ' + fmtDMY(agg.meta.dataFim);
 
     STATE.shown = { vendido: agg.vendido, pct: agg.percentual, restante: agg.restante };
   }
@@ -253,7 +174,7 @@
     document.getElementById('nv-valor').textContent = '+ ' + brl(delta);
     el.hidden = false;
     requestAnimationFrame(function () { el.classList.add('show'); });
-    const st = document.querySelector('.pt-stat.vendido');
+    const st = document.getElementById('s-vendido');
     if (st) { st.classList.remove('bump'); void st.offsetWidth; st.classList.add('bump'); }
     clearTimeout(STATE.nvTimer);
     STATE.nvTimer = setTimeout(function () {
