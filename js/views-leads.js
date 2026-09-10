@@ -77,24 +77,41 @@
   /* ---------------- formulários de ação ---------------- */
   H.reuniaoForm = function (lead, after) {
     const rp = lead.reuniao || {};
+    const R = (window.Views && Views._reuniao) || {};
     const b = buildForm(
       C.field('Data da reunião', '<input type="date" name="data" value="' + U.esc(rp.data || U.todayISO()) + '">') +
       C.field('Hora de início', '<input type="time" name="hora" value="' + U.esc(rp.hora || rp.horaInicio || '09:00') + '">') +
-      C.field('Hora de término', '<input type="time" name="horaFim" value="' + U.esc(rp.horaFim || '10:00') + '">') +
+      C.field('', '<div class="muted" style="font-size:13px">Duração fixa: <b>30 minutos</b> · término automático às <b class="term-fim">—</b></div>', true) +
       C.field('Consultor', '<select name="cons">' + C.opts(C.usuariosConsultores(), rp.consultorId || lead.consultorId) + '</select>') +
       C.field('Observações', '<textarea name="obs">' + U.esc(rp.obs || rp.observacoes || '') + '</textarea>', true)
     );
     const err = U.el('<div class="login-err" style="margin:6px 0"></div>');
     b.appendChild(err);
+    const conflitoBox = U.el('<div></div>');
+    b.appendChild(conflitoBox);
+    const horaInput = b.querySelector('[name="hora"]');
+    const termFim = b.querySelector('.term-fim');
+    function refreshFim() { termFim.textContent = (R.fimFixo ? R.fimFixo(horaInput.value) : '') || '—'; conflitoBox.innerHTML = ''; }
+    horaInput.addEventListener('input', refreshFim);
+    horaInput.addEventListener('change', refreshFim);
+    refreshFim();
     C.modal('Agendar reunião', b, {
       saveLabel: 'Agendar', onSave: function () {
-        err.textContent = '';
+        err.textContent = ''; conflitoBox.innerHTML = '';
         const dataISO = fval(b, 'data');
-        const ini = fval(b, 'hora'), fim = fval(b, 'horaFim');
+        const ini = fval(b, 'hora');
         if (!dataISO) { err.textContent = 'Informe a data da reunião.'; return false; }
         if (!ini) { err.textContent = 'Informe a hora de início.'; return false; }
-        if (!fim) { err.textContent = 'Informe a hora de término.'; return false; }
-        if (fim <= ini) { err.textContent = 'Horário de término deve ser maior que o horário de início.'; return false; }
+        const fim = R.fimFixo ? R.fimFixo(ini) : '';
+        if (!fim) { err.textContent = 'O horário de início deve ser até 23:30 (a reunião dura 30 minutos).'; return false; }
+        if (R.checarConflito) {
+          const owner = R.ownerParaConsultor ? R.ownerParaConsultor(fval(b, 'cons')) : null;
+          const chk = R.checarConflito(owner, dataISO, ini, (lead.reuniao && lead.reuniao.reuniaoId) || null);
+          if (chk) {
+            R.renderConflito(conflitoBox, chk, function (hhmm) { if (hhmm) { horaInput.value = hhmm; refreshFim(); } });
+            return false;
+          }
+        }
         const dados = { data: dataISO, hora: ini, horaFim: fim, consultorId: fval(b, 'cons'), obs: fval(b, 'obs') };
         Store.batch(function () {
           transitionEtapa(lead, 'reuniao_agendada');
@@ -131,23 +148,40 @@
      este compromisso (ver limparRetomarContato). */
   H.retomarContatoForm = function (lead, after) {
     const rc = lead.retomarContato || {};
+    const R = (window.Views && Views._reuniao) || {};
     const b = buildForm(
       C.field('Data para retomar contato', '<input type="date" name="data" value="' + U.esc(rc.data || U.todayISO()) + '">') +
       C.field('Hora de início', '<input type="time" name="hora" value="' + U.esc(rc.hora || '09:00') + '">') +
-      C.field('Hora de término', '<input type="time" name="horaFim" value="' + U.esc(rc.horaFim || '10:00') + '">') +
+      C.field('', '<div class="muted" style="font-size:13px">Duração fixa: <b>30 minutos</b> · término automático às <b class="term-fim">—</b></div>', true) +
       C.field('Observação', '<textarea name="obs">' + U.esc(rc.obs || '') + '</textarea>', true)
     );
     const err = U.el('<div class="login-err" style="margin:6px 0"></div>');
     b.appendChild(err);
+    const conflitoBox = U.el('<div></div>');
+    b.appendChild(conflitoBox);
+    const horaInput = b.querySelector('[name="hora"]');
+    const termFim = b.querySelector('.term-fim');
+    function refreshFim() { termFim.textContent = (R.fimFixo ? R.fimFixo(horaInput.value) : '') || '—'; conflitoBox.innerHTML = ''; }
+    horaInput.addEventListener('input', refreshFim);
+    horaInput.addEventListener('change', refreshFim);
+    refreshFim();
     C.modal('Retomar contato', b, {
       saveLabel: 'Confirmar', onSave: function () {
-        err.textContent = '';
+        err.textContent = ''; conflitoBox.innerHTML = '';
         const dataISO = fval(b, 'data');
-        const ini = fval(b, 'hora'), fim = fval(b, 'horaFim');
+        const ini = fval(b, 'hora');
         if (!dataISO) { err.textContent = 'Informe a data para retomar o contato.'; return false; }
         if (!ini) { err.textContent = 'Informe a hora de início.'; return false; }
-        if (!fim) { err.textContent = 'Informe a hora de término.'; return false; }
-        if (fim <= ini) { err.textContent = 'Horário de término deve ser maior que o horário de início.'; return false; }
+        const fim = R.fimFixo ? R.fimFixo(ini) : '';
+        if (!fim) { err.textContent = 'O horário de início deve ser até 23:30 (o compromisso dura 30 minutos).'; return false; }
+        if (R.checarConflito) {
+          const owner = R.ownerParaConsultor ? R.ownerParaConsultor(lead.consultorId) : null;
+          const chk = R.checarConflito(owner, dataISO, ini, (lead.retomarContato && lead.retomarContato.reuniaoId) || null);
+          if (chk) {
+            R.renderConflito(conflitoBox, chk, function (hhmm) { if (hhmm) { horaInput.value = hhmm; refreshFim(); } });
+            return false;
+          }
+        }
         const obsTxt = fval(b, 'obs');
         Store.batch(function () {
           transitionEtapa(lead, 'retomar_contato');

@@ -177,12 +177,13 @@
           (isHoje ? ';outline:2px solid ' + ACCENT + ';outline-offset:-1px' : '') + '">' +
           '<div class="muted" style="font-size:12px;font-weight:600">' + dia + '</div>';
         evs.slice(0, 4).forEach(function (r) {
+          const faixa = (r.horaInicio || '') + (r.horaFim ? '–' + r.horaFim : '');
           html += '<div class="cal-ev" data-id="' + U.esc(r.id) + '" ' +
             'style="font-size:11px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;' +
             'border-radius:4px;padding:1px 4px;margin-top:2px;background:' + EVBG +
             (r.status === 'cancelada' ? ';text-decoration:line-through;opacity:.55' : '') + '" ' +
-            'title="' + U.esc((r.horaInicio || '') + ' ' + (r.titulo || '')) + '">' +
-            U.esc(r.horaInicio || '') + ' ' + U.esc(r.titulo || '(sem título)') + '</div>';
+            'title="' + U.esc(faixa + ' ' + (r.titulo || '')) + '">' +
+            U.esc(faixa) + ' ' + U.esc(r.titulo || '(sem título)') + '</div>';
         });
         if (evs.length > 4) html += '<div class="muted" style="font-size:10px;margin-top:2px">+' + (evs.length - 4) + ' mais</div>';
         html += '</div>';

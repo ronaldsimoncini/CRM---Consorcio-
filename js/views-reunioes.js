@@ -19,6 +19,113 @@
   function scopedReunioes() { return Auth.scope(Store.all('reunioes')); }
   function scopedLeads() { return Auth.scope(Store.all('leads')); }
 
+  /* ============================================================
+     REGRA DE NEGÓCIO: toda reunião dura exatamente 30 minutos.
+     O usuário informa só data + hora de início; o fim é sempre
+     início + 30 min. Não há sobreposição para o mesmo responsável.
+     ============================================================ */
+  const DURACAO_MIN = 30;
+
+  function hhmmToMin(hhmm) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm == null ? '' : hhmm).trim());
+    if (!m) return null;
+    const h = Number(m[1]), mi = Number(m[2]);
+    if (h > 23 || mi > 59) return null;
+    return h * 60 + mi;
+  }
+  function minToHHMM(mins) {
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+  }
+  /* fim fixo = início + 30 min. '' se o início for tão tarde que o fim
+     passaria da meia-noite (ex.: 23:45) — o formulário rejeita nesse caso. */
+  function fimFixo(horaInicio) {
+    const ini = hhmmToMin(horaInicio);
+    if (ini == null) return '';
+    const fim = ini + DURACAO_MIN;
+    if (fim >= 24 * 60) return '';
+    return minToHHMM(fim);
+  }
+
+  /* primeira reunião AGENDADA do mesmo responsável (owner_uid), na mesma
+     data, cujo intervalo [ini, ini+30) se sobrepõe ao da nova reunião.
+     `ignorarId` exclui a própria reunião (ao reagendar/editar). */
+  function conflitoDe(ownerUid, dataISO, horaInicio, ignorarId) {
+    const ini = hhmmToMin(horaInicio);
+    if (ini == null || !ownerUid || !dataISO) return null;
+    const fim = ini + DURACAO_MIN;
+    const lista = Store.all('reunioes').filter(function (r) {
+      return r.owner_uid === ownerUid && r.status === 'agendada'
+        && r.data === dataISO && r.id !== ignorarId;
+    });
+    for (let i = 0; i < lista.length; i++) {
+      const r = lista[i];
+      const rIni = hhmmToMin(r.horaInicio);
+      if (rIni == null) continue;
+      const rFim = hhmmToMin(r.horaFim);
+      const rFimReal = (rFim != null && rFim > rIni) ? rFim : rIni + DURACAO_MIN;
+      if (ini < rFimReal && rIni < fim) return r; // sobreposição de intervalos
+    }
+    return null;
+  }
+
+  /* próximo início livre, em blocos de 30 min, a partir de `aPartirDe`
+     (alinhado ao grid :00/:30), no mesmo dia. null se o dia estiver cheio. */
+  function proximoLivre(ownerUid, dataISO, aPartirDe, ignorarId) {
+    let cand = hhmmToMin(aPartirDe);
+    if (cand == null) return null;
+    cand = Math.ceil(cand / DURACAO_MIN) * DURACAO_MIN;
+    const LIMITE = 23 * 60 + 30; // último início possível (fim = 24:00)
+    for (let guard = 0; guard < 48; guard++) {
+      if (cand > LIMITE) return null;
+      const hhmm = minToHHMM(cand);
+      const c = conflitoDe(ownerUid, dataISO, hhmm, ignorarId);
+      if (!c) return hhmm;
+      const cIni = hhmmToMin(c.horaInicio);
+      const cFim = hhmmToMin(c.horaFim);
+      const cFimReal = (cFim != null && cFim > cIni) ? cFim : cIni + DURACAO_MIN;
+      cand = Math.max(cand + DURACAO_MIN, Math.ceil(cFimReal / DURACAO_MIN) * DURACAO_MIN);
+    }
+    return null;
+  }
+
+  /* Verificação completa para os formulários. Retorna null se não há
+     conflito, ou { conflito, sugestao } (sugestao pode ser null se o
+     dia estiver cheio). */
+  function checarConflito(ownerUid, dataISO, horaInicio, ignorarId) {
+    const c = conflitoDe(ownerUid, dataISO, horaInicio, ignorarId);
+    if (!c) return null;
+    const partirDe = c.horaFim || fimFixo(c.horaInicio) || horaInicio;
+    return { conflito: c, sugestao: proximoLivre(ownerUid, dataISO, partirDe, ignorarId) };
+  }
+
+  function ownerParaConsultor(consultorId) {
+    return (Store.ownerUidFor && consultorId && Store.ownerUidFor(consultorId)) ||
+      (Auth.uid && Auth.uid()) || null;
+  }
+
+  /* Desenha o aviso de conflito + botão "Usar HH:MM" dentro de `box`.
+     onUsar(hhmm) é chamado ao clicar (o formulário aplica o novo horário). */
+  function renderConflito(box, chk, onUsar) {
+    const c = chk.conflito;
+    const ini = c.horaInicio || '?';
+    const fim = c.horaFim || fimFixo(c.horaInicio) || '?';
+    let html = '<div style="background:#FBF0DA;border:1px solid #E0C48A;border-radius:8px;' +
+      'padding:10px 12px;margin:8px 0;font-size:13px;line-height:1.55;color:#5A4213">' +
+      '<b>⚠️ Conflito de horário</b><br>' +
+      'Este responsável já tem uma reunião das <b>' + U.esc(ini) + '</b> às <b>' + U.esc(fim) + '</b>.';
+    if (chk.sugestao) {
+      html += '<br>Como toda reunião dura 30 minutos, o próximo horário livre é <b>' + U.esc(chk.sugestao) + '</b>.' +
+        '<div style="margin-top:8px"><button type="button" class="btn sm" data-usar>Usar ' + U.esc(chk.sugestao) + '</button></div>';
+    } else {
+      html += '<br>Não há horário livre para este responsável nesta data. Escolha outra data.';
+    }
+    html += '</div>';
+    box.innerHTML = html;
+    const btn = box.querySelector('[data-usar]');
+    if (btn) btn.onclick = function () { box.innerHTML = ''; onUsar(chk.sugestao); };
+  }
+
   /* Responsável = owner_uid (auth_uid). Sem segunda identificação no JSONB. */
   function nomeResponsavel(ownerUid) {
     if (!ownerUid) return '—';
@@ -130,13 +237,6 @@
      "Nova reunião" deste módulo: cria UM registro em 'reunioes', define
      owner_uid e sincroniza com o Google Calendar. Reagendar o mesmo lead
      ATUALIZA o registro existente (e o evento no Google) — nunca cria outro. */
-  function somaUmaHora(hhmm) {
-    const m = /^(\d{2}):(\d{2})$/.exec(hhmm || '');
-    if (!m) return hhmm || '';
-    const h = (Number(m[1]) + 1) % 24;
-    return String(h).padStart(2, '0') + ':' + m[2];
-  }
-
   /* reunião ativa (agendada) já ligada a este lead — por id explícito
      (ex.: lead.reuniao.reuniaoId ou lead.retomarContato.reuniaoId, recebido
      em `explicitId`) ou, na falta dele, por leadId + tipo (para não misturar
@@ -166,7 +266,9 @@
     const tipo = dados.tipo || 'reuniao';
     const dataISO = dados.data || U.todayISO();
     const ini = dados.hora || dados.horaInicio || '09:00';
-    const fim = dados.horaFim || somaUmaHora(ini);
+    /* duração fixa de 30 min — o fim é sempre início + 30, ignora qualquer
+       horaFim que o chamador tenha passado. */
+    const fim = fimFixo(ini) || ini;
     const campos = {
       leadId: lead.id,
       titulo: dados.titulo || ('Reunião: ' + (lead.nome || '')),
@@ -200,39 +302,78 @@
   /* ---------------- formulário ---------------- */
   function reuniaoForm(r) {
     const isNew = !r;
-    r = r || { leadId: '', titulo: '', data: U.todayISO(), horaInicio: '09:00', horaFim: '10:00', tipo: 'reuniao', observacoes: '' };
+    r = r || { leadId: '', titulo: '', data: U.todayISO(), horaInicio: '09:00', tipo: 'reuniao', observacoes: '' };
     const leadItems = scopedLeads().map(function (l) { return { value: l.id, label: l.nome }; });
+
+    /* NOVA reunião: fim fixo em 30 min (só campo de início + aviso de duração).
+       EDIÇÃO de reunião existente: preserva o comportamento antigo — "Hora final"
+       editável, sem normalizar a duração de reuniões já criadas. */
+    const campoFim = isNew
+      ? C.field('', '<div class="muted" style="font-size:13px">Duração fixa: <b>30 minutos</b> · término automático às <b class="term-fim">—</b></div>', true)
+      : C.field('Hora final', '<input type="time" name="fim" value="' + U.esc(r.horaFim || '') + '">');
 
     const b = U.el('<div class="form-grid">' +
       C.field('Lead (opcional)', '<select name="lead">' + C.opts(leadItems, r.leadId || '', { blank: '— sem lead —' }) + '</select>', true) +
       C.field('Título', '<input name="titulo" value="' + U.esc(r.titulo || '') + '">', true) +
       C.field('Data', '<input type="date" name="data" value="' + U.esc(r.data || '') + '">') +
-      C.field('Hora inicial', '<input type="time" name="ini" value="' + U.esc(r.horaInicio || '') + '">') +
-      C.field('Hora final', '<input type="time" name="fim" value="' + U.esc(r.horaFim || '') + '">') +
+      C.field(isNew ? 'Hora de início' : 'Hora inicial', '<input type="time" name="ini" value="' + U.esc(r.horaInicio || '') + '">') +
+      campoFim +
       C.field('Tipo', '<select name="tipo">' + C.opts(TIPOS, r.tipo || 'reuniao') + '</select>') +
       C.field('Observações', '<textarea name="obs">' + U.esc(r.observacoes || '') + '</textarea>', true) +
       '</div>');
     const err = U.el('<div class="login-err" style="margin:6px 0"></div>');
     b.appendChild(err);
+    const conflitoBox = U.el('<div></div>');
+    b.appendChild(conflitoBox);
     if (!isNew && r.googleCalendarEventId) {
       b.appendChild(U.el('<div class="field full"><span></span><div class="muted">' +
         'Esta reunião está no seu Google Calendar. Ao salvar, o evento é atualizado.</div></div>'));
     }
 
+    const iniInput = b.querySelector('[name="ini"]');
+    const termFim = b.querySelector('.term-fim'); // só existe em NOVA reunião
+    function refreshFim() {
+      if (termFim) termFim.textContent = fimFixo(iniInput.value) || '—';
+      conflitoBox.innerHTML = '';
+    }
+    iniInput.addEventListener('input', refreshFim);
+    iniInput.addEventListener('change', refreshFim);
+    refreshFim();
+
     C.modal(isNew ? 'Nova reunião' : 'Editar reunião', b, {
       saveLabel: isNew ? 'Criar reunião' : 'Salvar', onSave: function () {
-        err.textContent = '';
+        err.textContent = ''; conflitoBox.innerHTML = '';
         const titulo = fval(b, 'titulo');
         const dataISO = fval(b, 'data');
-        const ini = fval(b, 'ini'), fim = fval(b, 'fim');
+        const ini = fval(b, 'ini');
         const leadId = fval(b, 'lead') || null;
 
         if (!titulo) { err.textContent = 'Informe o título.'; return false; }
         if (!dataISO || isNaN(new Date(dataISO + 'T00:00:00').getTime())) { err.textContent = 'Informe uma data válida.'; return false; }
-        if (!ini) { err.textContent = 'Informe a hora inicial.'; return false; }
-        if (!fim) { err.textContent = 'Informe a hora final.'; return false; }
-        if (fim <= ini) { err.textContent = 'Horário de término deve ser maior que o horário de início.'; return false; }
+        if (!ini) { err.textContent = 'Informe a hora ' + (isNew ? 'de início' : 'inicial') + '.'; return false; }
+
+        let fim;
+        if (isNew) {
+          /* nova reunião: fim = início + 30 min (fixo) */
+          fim = fimFixo(ini);
+          if (!fim) { err.textContent = 'O horário de início deve ser até 23:30 (a reunião dura 30 minutos).'; return false; }
+        } else {
+          /* edição: preserva a hora final informada — NÃO normaliza reuniões antigas */
+          fim = fval(b, 'fim');
+          if (!fim) { err.textContent = 'Informe a hora final.'; return false; }
+          if (fim <= ini) { err.textContent = 'Horário de término deve ser maior que o horário de início.'; return false; }
+        }
         if (leadId && !Store.get('leads', leadId)) { err.textContent = 'Selecione um lead válido.'; return false; }
+
+        /* conflito de horário para o mesmo responsável (owner_uid) */
+        const ownerUid = isNew ? (Auth.uid && Auth.uid()) : r.owner_uid;
+        const chk = checarConflito(ownerUid, dataISO, ini, isNew ? null : r.id);
+        if (chk) {
+          renderConflito(conflitoBox, chk, function (hhmm) {
+            if (hhmm) { iniInput.value = hhmm; refreshFim(); }
+          });
+          return false;
+        }
 
         const campos = {
           leadId: leadId, titulo: titulo, data: dataISO, horaInicio: ini, horaFim: fim,
@@ -418,6 +559,12 @@
     excluir: excluirReuniao,
     tipoLabel: function (t) { return TIPO_LABEL[t] || t || '—'; },
     statusLabel: function (s) { return STATUS_LABEL[s] || s || '—'; },
-    statusCls: function (s) { return STATUS_CLS[s] || 'st-muted'; }
+    statusCls: function (s) { return STATUS_CLS[s] || 'st-muted'; },
+    /* regra dos 30 min — reaproveitada pelo Funil e pelo Retomar Contato */
+    DURACAO_MIN: DURACAO_MIN,
+    fimFixo: fimFixo,
+    checarConflito: checarConflito,
+    renderConflito: renderConflito,
+    ownerParaConsultor: ownerParaConsultor
   };
 })();
