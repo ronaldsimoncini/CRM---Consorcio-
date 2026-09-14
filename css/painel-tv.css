@@ -8,8 +8,8 @@
   --ink-2:#C3CEDC;
   --ink-dim:#6B7E92;
   --accent:#2FA366;        /* tom único de destaque (verde da marca, --ok no CRM) */
-  --bar-l1:#0B2A4A;        /* barra < 50%: azul LFT */
-  --bar-l2:#D9A73B;        /* barra 50–79%: amarelo/dourado */
+  --bar-l1:#E5484D;        /* barra < 50%: vermelho */
+  --bar-l2:#F0B429;        /* barra 50–79%: amarelo */
   --bar-l3:#2FA366;        /* barra 80–99%: verde */
   --bar-l4:#22C55E;        /* barra >= 100%: verde forte (meta batida) */
 }
@@ -64,16 +64,16 @@ body{
 
 /* REALIZADO — domina a tela */
 .pt-realizado-vl{
-  font-size:clamp(96px,12.5vw,440px);
+  font-size:clamp(112px,14.5vw,500px);
   font-weight:800;line-height:1;
-  color:var(--accent);
+  color:#4A90C2;
   font-variant-numeric:tabular-nums;
 }
 
 /* META — menor que o REALIZADO, mas com mais destaque que antes */
 .pt-meta .pt-k{
   font-size:1.1vw;font-weight:800;
-  color:var(--ink-2);
+  color:var(--ink);
 }
 .pt-meta-vl{
   font-size:clamp(36px,3.6vw,132px);
@@ -147,7 +147,7 @@ body:hover #fs-btn{opacity:.4}
   .pt-clock{font-size:2.4vw}
   .pt-k{font-size:2.6vw}
   .pt-meta .pt-k{font-size:2.9vw}
-  .pt-realizado-vl{font-size:20vw}
+  .pt-realizado-vl{font-size:23vw}
   .pt-meta-vl{font-size:8.2vw}
   .pt-bar{width:84vw}
   .pt-periodo{font-size:2.4vw}
