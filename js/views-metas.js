@@ -71,7 +71,8 @@
       const tv = U.el('<button class="btn ghost">📺 Painel TV</button>');
       tv.onclick = function () {
         const tks = Store.config().painelTokens || [];
-        const url = new URL('painel-tv.html' + (tks.length ? '?tv=' + encodeURIComponent(tks[0].token) : ''), location.href).href;
+        if (!tks.length) { alert('Nenhuma TV cadastrada ainda. Cadastre uma TV em Configurações → Painel TV antes de abrir o painel.'); return; }
+        const url = new URL('painel-tv.html?tv=' + encodeURIComponent(tks[0].token), location.href).href;
         window.open(url, '_blank');
       };
       hb.appendChild(tv);
