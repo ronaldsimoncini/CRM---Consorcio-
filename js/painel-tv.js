@@ -156,7 +156,9 @@
 
     document.getElementById('s-meta').textContent = brl(agg.meta.valorMeta);
     animateNumber(document.getElementById('s-vendido'), STATE.shown.vendido, agg.vendido, brl);
-    document.getElementById('prog-fill').style.width = clamp(agg.percentual, 0, 100) + '%';
+    const fill = document.getElementById('prog-fill');
+    fill.style.width = clamp(agg.percentual, 0, 100) + '%';
+    fill.setAttribute('data-lvl', agg.percentual >= 100 ? '4' : agg.percentual >= 80 ? '3' : agg.percentual >= 50 ? '2' : '1');
     document.getElementById('pt-periodo').textContent = fmtDMY(agg.meta.dataInicio) + ' – ' + fmtDMY(agg.meta.dataFim);
 
     STATE.shown = { vendido: agg.vendido, pct: agg.percentual, restante: agg.restante };

@@ -2,12 +2,16 @@
    Mostra SOMENTE: realizado, meta e barra de progresso.
    Uma única composição central, muito espaço vazio, sem cards, sem bordas. */
 :root{
-  --bg-a:#1A2942;          /* navy da marca LFT (--brand no CRM) */
-  --bg-b:#0E1728;
+  --bg-a:#0B2A4A;          /* azul escuro solicitado (identidade do Painel TV) */
+  --bg-b:#061A2E;
   --ink:#F4F7FB;
   --ink-2:#C3CEDC;
   --ink-dim:#6B7E92;
   --accent:#2FA366;        /* tom único de destaque (verde da marca, --ok no CRM) */
+  --bar-l1:#0B2A4A;        /* barra < 50%: azul LFT */
+  --bar-l2:#D9A73B;        /* barra 50–79%: amarelo/dourado */
+  --bar-l3:#2FA366;        /* barra 80–99%: verde */
+  --bar-l4:#22C55E;        /* barra >= 100%: verde forte (meta batida) */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -66,11 +70,15 @@ body{
   font-variant-numeric:tabular-nums;
 }
 
-/* META — menor, mas muito legível */
-.pt-meta-vl{
-  font-size:clamp(30px,2.9vw,110px);
-  font-weight:700;line-height:1;
+/* META — menor que o REALIZADO, mas com mais destaque que antes */
+.pt-meta .pt-k{
+  font-size:1.1vw;font-weight:800;
   color:var(--ink-2);
+}
+.pt-meta-vl{
+  font-size:clamp(36px,3.6vw,132px);
+  font-weight:800;line-height:1;
+  color:var(--ink);
   font-variant-numeric:tabular-nums;
 }
 
@@ -83,10 +91,13 @@ body{
 }
 .pt-bar-fill{
   height:100%;width:0;
-  background:var(--accent);
+  background:var(--bar-l1);
   border-radius:999px;
-  transition:width 1s ease;
+  transition:width 1s ease,background-color .6s ease;
 }
+.pt-bar-fill[data-lvl="2"]{background:var(--bar-l2)}
+.pt-bar-fill[data-lvl="3"]{background:var(--bar-l3)}
+.pt-bar-fill[data-lvl="4"]{background:var(--bar-l4)}
 
 /* período — pequeno e discreto, sem card */
 .pt-periodo{
@@ -135,8 +146,9 @@ body:hover #fs-btn{opacity:.4}
   .pt-brand span{font-size:1.9vw}
   .pt-clock{font-size:2.4vw}
   .pt-k{font-size:2.6vw}
+  .pt-meta .pt-k{font-size:2.9vw}
   .pt-realizado-vl{font-size:20vw}
-  .pt-meta-vl{font-size:7vw}
+  .pt-meta-vl{font-size:8.2vw}
   .pt-bar{width:84vw}
   .pt-periodo{font-size:2.4vw}
   #fs-btn{width:9vw;height:9vw;font-size:5vw}
