@@ -356,9 +356,27 @@
   }
 
   function funilTab(pane) {
-    pane.appendChild(U.el('<div class="card"><h3 class="card-title">Etapas do funil</h3><ol class="rank-list">' +
+    const card = U.el('<div class="card"><h3 class="card-title">Etapas do funil</h3><ol class="rank-list">' +
       Store.etapas().map(function (e) { return '<li><span>' + e.label + '</span><b>' + e.key + '</b></li>'; }).join('') +
-      '</ol><div class="muted">As etapas são fixas nesta versão para manter a integridade dos dados. Renomeação/personalização pode ser adicionada depois.</div></div>'));
+      '</ol><div class="muted">As 7 etapas originais são fixas (mantêm seu comportamento especial: reunião, proposta, fechamento, etc). Etapas adicionadas abaixo entram como etapas comerciais normais, sem comportamento especial. Renomear, excluir e reordenar etapas ficam para uma versão futura.</div></div>');
+    pane.appendChild(card);
+
+    const add = U.el('<button class="btn ghost sm" style="margin-top:10px">+ Adicionar etapa</button>');
+    add.onclick = function () { novaEtapaForm(); };
+    pane.appendChild(add);
+  }
+
+  function novaEtapaForm() {
+    const b = buildForm(C.field('Nome da nova etapa', '<input name="nome" placeholder="Ex.: Segundo Contato">', true));
+    C.modal('+ Adicionar etapa', b, {
+      saveLabel: 'Adicionar', onSave: function () {
+        const nome = fval(b, 'nome');
+        if (!nome) { alert('Informe o nome da etapa.'); return false; }
+        try { Store.addEtapaCustom(nome); }
+        catch (e) { alert(e.message || 'Não foi possível adicionar a etapa.'); return false; }
+        C.toast('Etapa adicionada.');
+      }
+    });
   }
 
   function dadosTab(pane) {

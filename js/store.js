@@ -90,7 +90,7 @@ window.Store = (function () {
     return {
       usuarios: [], consultores: [], produtos: [], leads: [], indicadores: [],
       simulacoes: [], propostas: [], vendas: [], metas: [], historico: [], reunioes: [],
-      config: { empresa: 'LFT Consórcios', origens: DEFAULT_ORIGENS.slice(), administradoras: DEFAULT_ADMINS.slice(), painelTokens: [] },
+      config: { empresa: 'LFT Consórcios', origens: DEFAULT_ORIGENS.slice(), administradoras: DEFAULT_ADMINS.slice(), painelTokens: [], etapasCustom: [] },
       _seeded: false, _v: 2
     };
   }
@@ -147,6 +147,7 @@ window.Store = (function () {
     if (!d.config.origens || !d.config.origens.length) d.config.origens = DEFAULT_ORIGENS.slice();
     if (!d.config.administradoras || !d.config.administradoras.length) d.config.administradoras = DEFAULT_ADMINS.slice();
     if (!Array.isArray(d.config.painelTokens)) d.config.painelTokens = [];
+    if (!Array.isArray(d.config.etapasCustom)) d.config.etapasCustom = [];
     ['usuarios', 'consultores', 'produtos', 'leads', 'indicadores', 'simulacoes', 'propostas', 'vendas', 'metas', 'historico', 'reunioes']
       .forEach(function (k) { if (!Array.isArray(d[k])) d[k] = []; });
     return d;
@@ -379,8 +380,35 @@ window.Store = (function () {
   function all(k) { return data[k].slice(); }
   function get(k, id) { return data[k].find(function (x) { return x.id === id; }); }
   function config() { return data.config; }
-  function etapas() { return ETAPAS.slice(); }
-  function etapaLabel(key) { const e = ETAPAS.find(function (x) { return x.key === key; }); return e ? e.label : key; }
+  /* Etapas fixas (com comportamento especial em views-leads.js) + etapas
+     customizadas pelo usuário, guardadas em config.data.etapasCustom
+     ([{key,label}], mesmo padrão de origens/administradoras). As custom
+     entram sempre no fim da lista e nunca substituem/alteram as fixas —
+     nenhuma migração de leads existentes é necessária. */
+  function etapas() { return ETAPAS.concat(data.config.etapasCustom || []); }
+  function etapaLabel(key) { const e = etapas().find(function (x) { return x.key === key; }); return e ? e.label : key; }
+
+  /* Gera uma key única (slug) para uma nova etapa a partir do nome digitado,
+     evitando colisão com as etapas fixas e com as já cadastradas. */
+  function slugEtapa(nome) {
+    let base = String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!base) base = 'etapa';
+    const existentes = etapas().map(function (e) { return e.key; });
+    let key = base, n = 2;
+    while (existentes.indexOf(key) >= 0) { key = base + '_' + n; n++; }
+    return key;
+  }
+
+  function addEtapaCustom(nome) {
+    assertWritable();
+    const label = String(nome || '').trim();
+    if (!label) throw new Error('Informe o nome da etapa.');
+    const key = slugEtapa(label);
+    const nova = { key: key, label: label.toUpperCase() };
+    setConfig({ etapasCustom: (data.config.etapasCustom || []).concat([nova]) });
+    return nova;
+  }
   function qualificacoes() { return QUALIFICACOES.slice(); }
   function qualificacaoInfo(key) { return QUALIFICACOES.find(function (x) { return x.key === key; }) || null; }
   function qualificacaoLabel(key) { const q = qualificacaoInfo(key); return q ? q.label : ''; }
@@ -518,7 +546,7 @@ window.Store = (function () {
   }, 0);
 
   return {
-    all: all, get: get, config: config, etapas: etapas, etapaLabel: etapaLabel,
+    all: all, get: get, config: config, etapas: etapas, etapaLabel: etapaLabel, addEtapaCustom: addEtapaCustom,
     qualificacoes: qualificacoes, qualificacaoLabel: qualificacaoLabel, qualificacaoInfo: qualificacaoInfo, constants: constants,
     insert: insert, update: update, remove: remove, setConfig: setConfig,
     logHist: logHist, historyOf: historyOf, subscribe: subscribe, batch: batch,
