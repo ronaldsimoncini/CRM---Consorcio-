@@ -362,7 +362,7 @@
       '<div class="muted">Arraste as etapas pela alça ⋮⋮ para mudar a ordem; o Kanban usa a mesma ordem. ' +
       'As 7 etapas originais mantêm seu comportamento especial (reunião, proposta, fechamento, etc). ' +
       'Etapas adicionadas entram como etapas comerciais normais, sem comportamento especial. ' +
-      'Renomear e excluir etapas ficam para uma versão futura.</div></div>');
+      'Renomear e excluir etapas customizadas é feito direto no Funil de Leads (menu ⋮ da coluna).</div></div>');
     const ol = card.querySelector('ol');
     let dragKey = null;
 

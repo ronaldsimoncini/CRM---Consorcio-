@@ -61,6 +61,10 @@
   function moveLead(leadId, nova) {
     const lead = Store.get('leads', leadId);
     if (!lead || lead.etapa === nova || !Auth.canEdit()) return;
+    if (!Store.etapas().some(function (e) { return e.key === nova; })) {
+      C.toast('Essa etapa não existe mais. Atualize a página e tente novamente.');
+      return;
+    }
     if (nova === 'reuniao_agendada') return H.reuniaoForm(lead);
     if (nova === 'reuniao_realizada') return H.reuniaoRealizadaForm(lead);
     if (nova === 'proposta_realizada') return H.propostaForm(lead);
@@ -775,19 +779,115 @@
     return card;
   }
 
+  /* ---------- administração das etapas direto no Kanban (somente admin) ----------
+     Toda regra de negócio/permissão está em Store (addEtapaCustom, reordenarEtapas,
+     renomearEtapaCustom, excluirEtapaCustom); aqui só há interface. */
+  const TIPO_ARRASTE_ETAPA = 'application/x-etapa';
+  let kanbanScrollX = 0; // preserva a rolagem horizontal entre re-renderizações do Funil
+
+  function isArrasteEtapa(e) {
+    return !!(e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], TIPO_ARRASTE_ETAPA) >= 0);
+  }
+
+  function erroAmigavel(e) { return (e && e.message) || 'Não foi possível concluir a operação.'; }
+
   /* Modal de criação de etapa — compartilhado com Configurações → Funil
      (Views._lead.novaEtapaForm). A trava de administrador fica em Store.addEtapaCustom. */
   function novaEtapaForm() {
-    const b = buildForm(C.field('Nome da etapa', '<input name="nome" placeholder="Ex.: Segundo Contato">', true));
+    const posOpts = '<option value="">No final</option>' + Store.etapas().map(function (e) {
+      return '<option value="' + U.esc(e.key) + '">Depois de ' + U.esc(e.label) + '</option>';
+    }).join('');
+    const b = buildForm(
+      C.field('Nome da etapa', '<input name="nome" placeholder="Ex.: Segundo Contato">', true) +
+      C.field('Posição', '<select name="pos">' + posOpts + '</select>', true)
+    );
     C.modal('Nova etapa', b, {
       saveLabel: 'Adicionar', cancelLabel: 'Cancelar', onSave: function () {
         const nome = fval(b, 'nome');
         if (!nome) { alert('Informe o nome da etapa.'); return false; }
-        try { Store.addEtapaCustom(nome); }
-        catch (e) { alert(e.message || 'Não foi possível adicionar a etapa.'); return false; }
+        try { Store.addEtapaCustom(nome, fval(b, 'pos') || null); }
+        catch (e) { alert(erroAmigavel(e)); return false; }
         C.toast('Etapa adicionada.');
       }
     });
+  }
+
+  function renomearEtapaForm(et) {
+    const b = buildForm(C.field('Nome da etapa', '<input name="nome" value="' + U.esc(et.label) + '">', true));
+    C.modal('Renomear etapa', b, {
+      saveLabel: 'Salvar', cancelLabel: 'Cancelar', onSave: function () {
+        const nome = fval(b, 'nome');
+        if (!nome) { alert('Informe o nome da etapa.'); return false; }
+        try { Store.renomearEtapaCustom(et.key, nome); }
+        catch (e) { alert(erroAmigavel(e)); return false; }
+        C.toast('Etapa renomeada.');
+      }
+    });
+  }
+
+  function executarExclusaoEtapa(et, destinoKey) {
+    Store.excluirEtapaCustom(et.key, destinoKey).then(function (r) {
+      C.toast(r.movidos
+        ? 'Etapa excluída. ' + r.movidos + (r.movidos === 1 ? ' lead movido' : ' leads movidos') + ' para ' + r.destino + '.'
+        : 'Etapa excluída.');
+    }).catch(function (e) {
+      console.error('Falha ao excluir etapa:', e);
+      alert('A etapa NÃO foi excluída. ' + erroAmigavel(e));
+    });
+  }
+
+  function excluirEtapaForm(et) {
+    const qtd = Store.all('leads').filter(function (l) { return l.etapa === et.key; }).length;
+    if (!qtd) {
+      C.modal('Excluir etapa', U.el('<div><p>Excluir a etapa <b>' + U.esc(et.label) + '</b>?</p>' +
+        '<p class="muted">Nenhum lead está nesta etapa. Essa ação não pode ser desfeita.</p></div>'), {
+        saveLabel: 'Excluir', cancelLabel: 'Cancelar', onSave: function () { executarExclusaoEtapa(et, null); }
+      });
+      return;
+    }
+    const destinos = Store.etapasGenericas().filter(function (e) { return e.key !== et.key; })
+      .map(function (e) { return { value: e.key, label: e.label }; });
+    const b = U.el('<div><p>Existem <b>' + qtd + '</b> ' + (qtd === 1 ? 'lead' : 'leads') + ' na etapa <b>' + U.esc(et.label) +
+      '</b>. Para qual etapa deseja mover esses leads?</p>' +
+      '<div class="form-grid">' + C.field('Etapa de destino', '<select name="destino">' + C.opts(destinos, '', { blank: '— Selecionar etapa —' }) + '</select>', true) + '</div>' +
+      '<p class="muted">Nenhum lead é apagado e o histórico de cada um é preservado. Só são oferecidas etapas sem comportamento especial.</p></div>');
+    C.modal('Excluir etapa', b, {
+      saveLabel: 'Mover leads e excluir', cancelLabel: 'Cancelar', onSave: function () {
+        const destino = fval(b, 'destino');
+        if (!destino) { alert('Selecione a etapa de destino.'); return false; }
+        executarExclusaoEtapa(et, destino);
+      }
+    });
+  }
+
+  function moverEtapaPosicao(key, delta) {
+    const keys = Store.etapas().map(function (e) { return e.key; });
+    const i = keys.indexOf(key), j = i + delta;
+    if (i < 0 || j < 0 || j >= keys.length) return;
+    keys[i] = keys[j]; keys[j] = key;
+    try { Store.reordenarEtapas(keys); }
+    catch (e) { alert(erroAmigavel(e)); }
+  }
+
+  /* menu ⋮ — posição fixa para não ser cortado pelo overflow do Kanban */
+  function fecharMenuEtapa() {
+    document.querySelectorAll('.col-menu').forEach(function (m) { m.remove(); });
+  }
+  function abrirMenuEtapa(btn, itens) {
+    fecharMenuEtapa();
+    const menu = U.el('<div class="col-menu"></div>');
+    itens.forEach(function (it) {
+      const b = U.el('<button type="button"></button>');
+      b.textContent = it.label;
+      if (it.danger) b.classList.add('danger');
+      b.onclick = function (ev) { ev.stopPropagation(); fecharMenuEtapa(); it.fn(); };
+      menu.appendChild(b);
+    });
+    document.body.appendChild(menu);
+    const r = btn.getBoundingClientRect();
+    menu.style.top = (r.bottom + 4) + 'px';
+    menu.style.left = Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    setTimeout(function () { document.addEventListener('click', fecharMenuEtapa, { once: true }); }, 0);
   }
 
   /* ================= VIEW: FUNIL ================= */
@@ -811,38 +911,116 @@
     const buscaInput = bar.querySelector('#f-funil-busca');
 
     const leads = scopedLeads();
+    const admin = Auth.isAdmin();
     const board = U.el('<div class="kanban"></div>');
-    Store.etapas().forEach(function (et) {
-      const col = U.el('<div class="kanban-col" data-etapa="' + et.key + '">' +
-        '<div class="kanban-col-head"><span>' + et.label + '</span><span class="cnt">0</span></div>' +
-        '<div class="kanban-list"></div></div>');
+    const etapasLista = Store.etapas();
+    const ordemKeys = etapasLista.map(function (e) { return e.key; });
+
+    function preencherColuna(col, arr) {
       const list = col.querySelector('.kanban-list');
-      const arr = leads.filter(function (l) { return l.etapa === et.key; })
-        .sort(function (a, b) { return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }); });
+      arr.sort(function (a, b) { return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }); });
       col.querySelector('.cnt').textContent = arr.length + (arr.length === 1 ? ' lead' : ' leads');
       arr.forEach(function (l) {
         const card = leadCard(l);
         card.dataset.nome = normalizarBusca(l.nome);
         list.appendChild(card);
       });
+    }
+    function limparIndicadoresColuna() {
+      board.querySelectorAll('.kanban-col').forEach(function (c) { c.classList.remove('col-dragging', 'drop-col-before', 'drop-col-after'); });
+    }
+
+    /* Proteção contra leads órfãos (etapa que não existe mais): só para admin, apenas visual —
+       NÃO é uma etapa real, não recebe cartões e NÃO altera a etapa de nenhum lead. */
+    if (admin) {
+      const orfaos = leads.filter(function (l) { return ordemKeys.indexOf(l.etapa) < 0; });
+      if (orfaos.length) {
+        const colO = U.el('<div class="kanban-col orfa"><div class="kanban-col-head"><span class="col-name">SEM ETAPA</span><span class="cnt">0</span></div>' +
+          '<div class="kanban-list"><div class="muted kanban-orfa-msg">Estes leads estão numa etapa que não existe mais. Arraste-os (ou use ⇄) para uma etapa válida.</div></div></div>');
+        preencherColuna(colO, orfaos);
+        board.appendChild(colO);
+      }
+    }
+
+    etapasLista.forEach(function (et, idx) {
+      const col = U.el('<div class="kanban-col" data-etapa="' + U.esc(et.key) + '">' +
+        (admin
+          ? '<div class="kanban-col-head"><span class="col-title"><i class="col-handle" draggable="true" title="Arraste para mudar a posição da etapa">⋮⋮</i><span class="col-name"></span></span>' +
+            '<span class="col-right"><span class="cnt">0</span><button type="button" class="col-menu-btn" title="Opções da etapa" aria-label="Opções da etapa">⋮</button></span></div>'
+          : '<div class="kanban-col-head"><span class="col-name"></span><span class="cnt">0</span></div>') +
+        '<div class="kanban-list"></div></div>');
+      col.querySelector('.col-name').textContent = et.label;
+      preencherColuna(col, leads.filter(function (l) { return l.etapa === et.key; }));
 
       if (Auth.canEdit()) {
-        col.addEventListener('dragover', function (e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drop'); });
+        /* arraste de COLUNA (tipo próprio) é ignorado aqui: estes handlers são só para cartões de lead */
+        col.addEventListener('dragover', function (e) { if (isArrasteEtapa(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; col.classList.add('drop'); });
         col.addEventListener('dragleave', function (e) { if (!col.contains(e.relatedTarget)) col.classList.remove('drop'); });
         col.addEventListener('drop', function (e) {
+          if (isArrasteEtapa(e)) return;
           e.preventDefault(); col.classList.remove('drop');
           const lid = e.dataTransfer.getData('text/plain');
           if (lid) moveLead(lid, et.key);
         });
       }
+
+      if (admin) {
+        /* reordenar: só a alça ⋮⋮ é arrastável; o corpo da coluna continua exclusivo dos leads */
+        const handle = col.querySelector('.col-handle');
+        handle.addEventListener('dragstart', function (e) {
+          e.dataTransfer.setData(TIPO_ARRASTE_ETAPA, et.key);
+          e.dataTransfer.effectAllowed = 'move';
+          try { e.dataTransfer.setDragImage(col, 20, 20); } catch (x) { /* navegador sem suporte: usa a imagem padrão */ }
+          setTimeout(function () { col.classList.add('col-dragging'); }, 0);
+        });
+        handle.addEventListener('dragend', limparIndicadoresColuna);
+        function depoisDoMeio(e) { const r = col.getBoundingClientRect(); return (e.clientX - r.left) > r.width / 2; }
+        col.addEventListener('dragover', function (e) {
+          if (!isArrasteEtapa(e)) return;
+          e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+          const depois = depoisDoMeio(e);
+          col.classList.toggle('drop-col-after', depois);
+          col.classList.toggle('drop-col-before', !depois);
+        });
+        col.addEventListener('dragleave', function (e) {
+          if (isArrasteEtapa(e) && !col.contains(e.relatedTarget)) col.classList.remove('drop-col-before', 'drop-col-after');
+        });
+        col.addEventListener('drop', function (e) {
+          if (!isArrasteEtapa(e)) return;
+          e.preventDefault();
+          const mov = e.dataTransfer.getData(TIPO_ARRASTE_ETAPA);
+          const depois = depoisDoMeio(e);
+          limparIndicadoresColuna();
+          if (!mov || mov === et.key) return;
+          const keys = ordemKeys.filter(function (k) { return k !== mov; });
+          const i = keys.indexOf(et.key);
+          keys.splice(depois ? i + 1 : i, 0, mov);
+          try { Store.reordenarEtapas(keys); } catch (err) { alert(erroAmigavel(err)); }
+        });
+
+        col.querySelector('.col-menu-btn').addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          const itens = [];
+          if (Store.isEtapaCustom(et.key)) {
+            itens.push({ label: 'Renomear', fn: function () { renomearEtapaForm(et); } });
+            itens.push({ label: 'Excluir', danger: true, fn: function () { excluirEtapaForm(et); } });
+          }
+          if (idx > 0) itens.push({ label: '← Mover para esquerda', fn: function () { moverEtapaPosicao(et.key, -1); } });
+          if (idx < etapasLista.length - 1) itens.push({ label: 'Mover para direita →', fn: function () { moverEtapaPosicao(et.key, 1); } });
+          abrirMenuEtapa(ev.currentTarget, itens);
+        });
+      }
       board.appendChild(col);
     });
-    if (Auth.isAdmin()) {
+    if (admin) {
       const addWrap = U.el('<div class="kanban-add"><button class="btn ghost sm">+ Adicionar etapa</button></div>');
       addWrap.querySelector('button').onclick = function () { novaEtapaForm(); };
       board.appendChild(addWrap);
     }
     container.appendChild(board);
+    board.scrollLeft = kanbanScrollX;
+    requestAnimationFrame(function () { board.scrollLeft = kanbanScrollX; });
+    board.addEventListener('scroll', function () { kanbanScrollX = board.scrollLeft; });
     container.appendChild(U.el('<div class="muted">Arraste os cartões entre as colunas para mudar a etapa. No celular, abra o cartão e use "Mover etapa".</div>'));
 
     /* pesquisa em tempo real: só mostra/esconde cards já renderizados (não refaz colunas,

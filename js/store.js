@@ -420,6 +420,29 @@ window.Store = (function () {
     }
   }
 
+  /* ---------- administração das etapas (somente administrador) ---------- */
+  function isEtapaCustom(key) {
+    return (data.config.etapasCustom || []).some(function (e) { return e.key === key; }) &&
+      !ETAPAS.some(function (e) { return e.key === key; });
+  }
+
+  /* Etapas sem comportamento especial (as únicas aceitas como destino de exclusão em massa):
+     as originais "novo" e "primeira_ligacao" + todas as customizadas. */
+  function etapasGenericas() {
+    return etapas().filter(function (e) { return e.key === 'novo' || e.key === 'primeira_ligacao' || isEtapaCustom(e.key); });
+  }
+
+  function limparNome(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
+  function nomeNormalizado(s) { return limparNome(s).toLocaleLowerCase('pt-BR'); }
+  function assertNomeEtapaLivre(label, exceptKey) {
+    const n = nomeNormalizado(label);
+    if (!n) throw new Error('Informe o nome da etapa.');
+    if (n === 'sem etapa') throw new Error('Esse nome é reservado. Escolha outro nome.');
+    if (etapas().some(function (e) { return e.key !== exceptKey && nomeNormalizado(e.label) === n; })) {
+      throw new Error('Já existe uma etapa com esse nome.');
+    }
+  }
+
   function reordenarEtapas(keys) {
     assertAdminEtapas();
     assertWritable();
@@ -431,15 +454,109 @@ window.Store = (function () {
     setConfig({ etapasOrdem: keys.slice() });
   }
 
-  function addEtapaCustom(nome) {
+  /* depoisDeKey (opcional): key da etapa após a qual a nova será inserida; vazio = no final.
+     etapasCustom e etapasOrdem são gravadas numa única operação. */
+  function addEtapaCustom(nome, depoisDeKey) {
     assertAdminEtapas();
     assertWritable();
-    const label = String(nome || '').trim();
-    if (!label) throw new Error('Informe o nome da etapa.');
+    const label = limparNome(nome);
+    assertNomeEtapaLivre(label, null);
     const key = slugEtapa(label);
     const nova = { key: key, label: label.toUpperCase() };
-    setConfig({ etapasCustom: (data.config.etapasCustom || []).concat([nova]) });
+    const patch = { etapasCustom: (data.config.etapasCustom || []).concat([nova]) };
+    if (depoisDeKey) {
+      const ordem = etapas().map(function (e) { return e.key; });
+      const i = ordem.indexOf(depoisDeKey);
+      if (i < 0) throw new Error('Posição inválida: a etapa de referência não existe mais.');
+      ordem.splice(i + 1, 0, key);
+      patch.etapasOrdem = ordem;
+    }
+    setConfig(patch);
     return nova;
+  }
+
+  /* Só altera o label visual; a key, a ordem e os leads ficam intactos. */
+  function renomearEtapaCustom(key, novoNome) {
+    assertAdminEtapas();
+    assertWritable();
+    if (!isEtapaCustom(key)) throw new Error('Somente etapas customizadas podem ser renomeadas.');
+    const label = limparNome(novoNome);
+    assertNomeEtapaLivre(label, key);
+    setConfig({
+      etapasCustom: (data.config.etapasCustom || []).map(function (e) {
+        return e.key === key ? Object.assign({}, e, { label: label.toUpperCase() }) : e;
+      })
+    });
+  }
+
+  let _excluindoEtapa = false;
+
+  /* Exclui uma etapa CUSTOMIZADA. Se houver leads nela, exige um destino genérico e os move
+     (sem apagar nenhum lead; histórico preservado + nova linha de histórico por lead).
+     Na nuvem, os leads e o histórico vão em requisições únicas e AGUARDADAS; a etapa só sai
+     da configuração depois que elas confirmam. Se algo falhar, nada é excluído. */
+  async function excluirEtapaCustom(key, destinoKey) {
+    assertAdminEtapas();
+    assertWritable();
+    if (!isEtapaCustom(key)) throw new Error('Somente etapas customizadas podem ser excluídas.');
+    if (_excluindoEtapa) throw new Error('Já existe uma exclusão de etapa em andamento.');
+    _excluindoEtapa = true;
+    try {
+      const c = (_mode === 'cloud') ? sbClient() : null;
+      if (_mode === 'cloud') {
+        await _queue;                                   // aguarda gravações pendentes
+        await hydrate();                                // dados frescos do servidor (pega leads de outros usuários)
+        if (_mode !== 'cloud') throw new Error('Não foi possível confirmar os dados com o servidor. Nada foi excluído.');
+        assertAdminEtapas();
+        if (!isEtapaCustom(key)) throw new Error('Esta etapa já não existe (talvez outro administrador a excluiu).');
+      }
+
+      const afetados = data.leads.filter(function (l) { return l.etapa === key; });
+      const labelOrigem = etapaLabel(key);
+      let labelDestino = '';
+      if (afetados.length) {
+        if (!destinoKey || destinoKey === key || !etapasGenericas().some(function (e) { return e.key === destinoKey; })) {
+          throw new Error('Existem ' + afetados.length + ' lead(s) nesta etapa. Escolha uma etapa de destino válida (sem comportamento especial).');
+        }
+        labelDestino = etapaLabel(destinoKey);
+        const agora = U.nowISO();
+        const uid = (window.Auth && Auth.currentId) ? Auth.currentId() : null;
+        const texto = 'Movido de ' + labelOrigem + ' para ' + labelDestino + ' (etapa excluída)';
+
+        if (_mode === 'cloud') {
+          if (!c) throw new Error('Não foi possível falar com o servidor. Nada foi excluído.');
+          const novos = afetados.map(function (l) { return Object.assign({}, l, { etapa: destinoKey, atualizadoEm: agora }); });
+          const rowsLeads = novos.map(function (l) { const r = objToRow(l, 'leads'); delete r.owner_uid; return r; });
+          const hist = afetados.map(function (l) {
+            const h = { id: U.uid(), leadId: l.id, tipo: 'mudanca_etapa', texto: texto, usuarioId: uid || null, data: agora };
+            if (l.owner_uid) h.owner_uid = l.owner_uid;
+            return h;
+          });
+          serverError(await c.from('leads').upsert(rowsLeads));
+          serverError(await c.from('historico').upsert(hist.map(function (h) { return objToRow(h, 'historico'); })));
+          novos.forEach(function (nl) {
+            const i = data.leads.findIndex(function (x) { return x.id === nl.id; });
+            if (i >= 0) data.leads[i] = nl;
+          });
+          hist.forEach(function (h) { data.historico.push(h); });
+        } else {
+          batch(function () {
+            afetados.forEach(function (l) {
+              update('leads', l.id, { etapa: destinoKey, atualizadoEm: agora });
+              logHist(l.id, 'mudanca_etapa', texto, uid);
+            });
+          });
+        }
+      }
+
+      setConfig({
+        etapasCustom: (data.config.etapasCustom || []).filter(function (e) { return e.key !== key; }),
+        etapasOrdem: (data.config.etapasOrdem || []).filter(function (k) { return k !== key; })
+      });
+      return { movidos: afetados.length, destino: labelDestino };
+    } finally {
+      _excluindoEtapa = false;
+    }
   }
   function qualificacoes() { return QUALIFICACOES.slice(); }
   function qualificacaoInfo(key) { return QUALIFICACOES.find(function (x) { return x.key === key; }) || null; }
@@ -579,6 +696,8 @@ window.Store = (function () {
 
   return {
     all: all, get: get, config: config, etapas: etapas, etapaLabel: etapaLabel, addEtapaCustom: addEtapaCustom, reordenarEtapas: reordenarEtapas,
+    renomearEtapaCustom: renomearEtapaCustom, excluirEtapaCustom: excluirEtapaCustom,
+    isEtapaCustom: isEtapaCustom, etapasGenericas: etapasGenericas,
     qualificacoes: qualificacoes, qualificacaoLabel: qualificacaoLabel, qualificacaoInfo: qualificacaoInfo, constants: constants,
     insert: insert, update: update, remove: remove, setConfig: setConfig,
     logHist: logHist, historyOf: historyOf, subscribe: subscribe, batch: batch,
