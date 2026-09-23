@@ -775,6 +775,21 @@
     return card;
   }
 
+  /* Modal de criação de etapa — compartilhado com Configurações → Funil
+     (Views._lead.novaEtapaForm). A trava de administrador fica em Store.addEtapaCustom. */
+  function novaEtapaForm() {
+    const b = buildForm(C.field('Nome da etapa', '<input name="nome" placeholder="Ex.: Segundo Contato">', true));
+    C.modal('Nova etapa', b, {
+      saveLabel: 'Adicionar', cancelLabel: 'Cancelar', onSave: function () {
+        const nome = fval(b, 'nome');
+        if (!nome) { alert('Informe o nome da etapa.'); return false; }
+        try { Store.addEtapaCustom(nome); }
+        catch (e) { alert(e.message || 'Não foi possível adicionar a etapa.'); return false; }
+        C.toast('Etapa adicionada.');
+      }
+    });
+  }
+
   /* ================= VIEW: FUNIL ================= */
   Views.funil = function (container) {
     const head = U.el('<div class="page-head"><h1 class="page-title">Funil de Leads</h1></div>');
@@ -822,6 +837,11 @@
       }
       board.appendChild(col);
     });
+    if (Auth.isAdmin()) {
+      const addWrap = U.el('<div class="kanban-add"><button class="btn ghost sm">+ Adicionar etapa</button></div>');
+      addWrap.querySelector('button').onclick = function () { novaEtapaForm(); };
+      board.appendChild(addWrap);
+    }
     container.appendChild(board);
     container.appendChild(U.el('<div class="muted">Arraste os cartões entre as colunas para mudar a etapa. No celular, abra o cartão e use "Mover etapa".</div>'));
 
@@ -937,6 +957,7 @@
   Views._lead = {
     openModal: openLeadModal,
     novoLead: novoLeadForm,
+    novaEtapaForm: novaEtapaForm,
     simForm: simForm,
     propostaForm: function (lead, after) { return H.propostaForm(lead, after); },
     fecharVenda: function (lead, after) { return H.fecharVendaForm(lead, after); },

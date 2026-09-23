@@ -356,27 +356,63 @@
   }
 
   function funilTab(pane) {
-    const card = U.el('<div class="card"><h3 class="card-title">Etapas do funil</h3><ol class="rank-list">' +
-      Store.etapas().map(function (e) { return '<li><span>' + e.label + '</span><b>' + e.key + '</b></li>'; }).join('') +
-      '</ol><div class="muted">As 7 etapas originais são fixas (mantêm seu comportamento especial: reunião, proposta, fechamento, etc). Etapas adicionadas abaixo entram como etapas comerciais normais, sem comportamento especial. Renomear, excluir e reordenar etapas ficam para uma versão futura.</div></div>');
+    const etapas = Store.etapas();
+    const card = U.el('<div class="card"><h3 class="card-title">Etapas do funil</h3>' +
+      '<ol class="rank-list etapas-sort"></ol>' +
+      '<div class="muted">Arraste as etapas pela alça ⋮⋮ para mudar a ordem; o Kanban usa a mesma ordem. ' +
+      'As 7 etapas originais mantêm seu comportamento especial (reunião, proposta, fechamento, etc). ' +
+      'Etapas adicionadas entram como etapas comerciais normais, sem comportamento especial. ' +
+      'Renomear e excluir etapas ficam para uma versão futura.</div></div>');
+    const ol = card.querySelector('ol');
+    let dragKey = null;
+
+    function limpar() {
+      ol.querySelectorAll('li').forEach(function (x) { x.classList.remove('drop-before', 'drop-after', 'dragging-et'); });
+    }
+    function depoisDoMeio(ev, li) {
+      const r = li.getBoundingClientRect();
+      return (ev.clientY - r.top) > r.height / 2;
+    }
+
+    etapas.forEach(function (e) {
+      const li = U.el('<li draggable="true"><span><i class="drag-handle" title="Arraste para reordenar">⋮⋮</i> ' +
+        U.esc(e.label) + '</span><b>' + U.esc(e.key) + '</b></li>');
+      li.addEventListener('dragstart', function (ev) {
+        dragKey = e.key;
+        ev.dataTransfer.setData('application/x-etapa', e.key);
+        ev.dataTransfer.effectAllowed = 'move';
+        setTimeout(function () { li.classList.add('dragging-et'); }, 0);
+      });
+      li.addEventListener('dragend', function () { dragKey = null; limpar(); });
+      li.addEventListener('dragover', function (ev) {
+        if (dragKey === null) return;
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'move';
+        const depois = depoisDoMeio(ev, li);
+        li.classList.toggle('drop-after', depois);
+        li.classList.toggle('drop-before', !depois);
+      });
+      li.addEventListener('dragleave', function () { li.classList.remove('drop-before', 'drop-after'); });
+      li.addEventListener('drop', function (ev) {
+        if (dragKey === null) return;
+        ev.preventDefault();
+        const depois = depoisDoMeio(ev, li);
+        const mov = dragKey;
+        dragKey = null; limpar();
+        if (mov === e.key) return;
+        const keys = etapas.map(function (x) { return x.key; }).filter(function (k) { return k !== mov; });
+        const idx = keys.indexOf(e.key);
+        keys.splice(depois ? idx + 1 : idx, 0, mov);
+        try { Store.reordenarEtapas(keys); C.toast('Ordem das etapas salva.'); }
+        catch (err) { alert(err.message || 'Não foi possível reordenar as etapas.'); }
+      });
+      ol.appendChild(li);
+    });
     pane.appendChild(card);
 
     const add = U.el('<button class="btn ghost sm" style="margin-top:10px">+ Adicionar etapa</button>');
-    add.onclick = function () { novaEtapaForm(); };
+    add.onclick = function () { if (Views._lead && Views._lead.novaEtapaForm) Views._lead.novaEtapaForm(); };
     pane.appendChild(add);
-  }
-
-  function novaEtapaForm() {
-    const b = buildForm(C.field('Nome da nova etapa', '<input name="nome" placeholder="Ex.: Segundo Contato">', true));
-    C.modal('+ Adicionar etapa', b, {
-      saveLabel: 'Adicionar', onSave: function () {
-        const nome = fval(b, 'nome');
-        if (!nome) { alert('Informe o nome da etapa.'); return false; }
-        try { Store.addEtapaCustom(nome); }
-        catch (e) { alert(e.message || 'Não foi possível adicionar a etapa.'); return false; }
-        C.toast('Etapa adicionada.');
-      }
-    });
   }
 
   function dadosTab(pane) {

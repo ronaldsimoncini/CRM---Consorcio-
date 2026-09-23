@@ -90,7 +90,7 @@ window.Store = (function () {
     return {
       usuarios: [], consultores: [], produtos: [], leads: [], indicadores: [],
       simulacoes: [], propostas: [], vendas: [], metas: [], historico: [], reunioes: [],
-      config: { empresa: 'LFT Consórcios', origens: DEFAULT_ORIGENS.slice(), administradoras: DEFAULT_ADMINS.slice(), painelTokens: [], etapasCustom: [] },
+      config: { empresa: 'LFT Consórcios', origens: DEFAULT_ORIGENS.slice(), administradoras: DEFAULT_ADMINS.slice(), painelTokens: [], etapasCustom: [], etapasOrdem: [] },
       _seeded: false, _v: 2
     };
   }
@@ -148,6 +148,7 @@ window.Store = (function () {
     if (!d.config.administradoras || !d.config.administradoras.length) d.config.administradoras = DEFAULT_ADMINS.slice();
     if (!Array.isArray(d.config.painelTokens)) d.config.painelTokens = [];
     if (!Array.isArray(d.config.etapasCustom)) d.config.etapasCustom = [];
+    if (!Array.isArray(d.config.etapasOrdem)) d.config.etapasOrdem = [];
     ['usuarios', 'consultores', 'produtos', 'leads', 'indicadores', 'simulacoes', 'propostas', 'vendas', 'metas', 'historico', 'reunioes']
       .forEach(function (k) { if (!Array.isArray(d[k])) d[k] = []; });
     return d;
@@ -385,7 +386,19 @@ window.Store = (function () {
      ([{key,label}], mesmo padrão de origens/administradoras). As custom
      entram sempre no fim da lista e nunca substituem/alteram as fixas —
      nenhuma migração de leads existentes é necessária. */
-  function etapas() { return ETAPAS.concat(data.config.etapasCustom || []); }
+  /* A ordem de exibição vem de config.data.etapasOrdem (array de keys). Keys
+     fora dessa lista (ex.: etapa recém-criada) ficam no fim; keys da lista que
+     não existem mais são ignoradas. Sem etapasOrdem: fixas + custom, como antes. */
+  function etapas() {
+    const base = ETAPAS.concat(data.config.etapasCustom || []);
+    const ordem = data.config.etapasOrdem;
+    if (!Array.isArray(ordem) || !ordem.length) return base;
+    const porKey = {}, usada = {}, out = [];
+    base.forEach(function (e) { porKey[e.key] = e; });
+    ordem.forEach(function (k) { if (porKey[k] && !usada[k]) { usada[k] = true; out.push(porKey[k]); } });
+    base.forEach(function (e) { if (!usada[e.key]) out.push(e); });
+    return out;
+  }
   function etapaLabel(key) { const e = etapas().find(function (x) { return x.key === key; }); return e ? e.label : key; }
 
   /* Gera uma key única (slug) para uma nova etapa a partir do nome digitado,
@@ -400,7 +413,26 @@ window.Store = (function () {
     return key;
   }
 
+  /* Proteção na função (não só na interface): só administrador altera o funil. */
+  function assertAdminEtapas() {
+    if (!(window.Auth && typeof Auth.isAdmin === 'function' && Auth.isAdmin())) {
+      throw new Error('Apenas administradores podem alterar as etapas do funil.');
+    }
+  }
+
+  function reordenarEtapas(keys) {
+    assertAdminEtapas();
+    assertWritable();
+    const atuais = etapas().map(function (e) { return e.key; });
+    if (!Array.isArray(keys) || keys.length !== atuais.length ||
+        keys.some(function (k, i) { return atuais.indexOf(k) < 0 || keys.indexOf(k) !== i; })) {
+      throw new Error('Ordem de etapas inválida.');
+    }
+    setConfig({ etapasOrdem: keys.slice() });
+  }
+
   function addEtapaCustom(nome) {
+    assertAdminEtapas();
     assertWritable();
     const label = String(nome || '').trim();
     if (!label) throw new Error('Informe o nome da etapa.');
@@ -546,7 +578,7 @@ window.Store = (function () {
   }, 0);
 
   return {
-    all: all, get: get, config: config, etapas: etapas, etapaLabel: etapaLabel, addEtapaCustom: addEtapaCustom,
+    all: all, get: get, config: config, etapas: etapas, etapaLabel: etapaLabel, addEtapaCustom: addEtapaCustom, reordenarEtapas: reordenarEtapas,
     qualificacoes: qualificacoes, qualificacaoLabel: qualificacaoLabel, qualificacaoInfo: qualificacaoInfo, constants: constants,
     insert: insert, update: update, remove: remove, setConfig: setConfig,
     logHist: logHist, historyOf: historyOf, subscribe: subscribe, batch: batch,
