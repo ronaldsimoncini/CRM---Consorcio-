@@ -916,10 +916,20 @@
     const etapasLista = Store.etapas();
     const ordemKeys = etapasLista.map(function (e) { return e.key; });
 
+    /* Totalizador financeiro: SOMENTE a coluna "boleto_e_assinatura" soma
+       lead.valorCredito no cabeçalho (identificação por key, nunca por label).
+       Etapa continua comercial normal — nenhuma outra lógica muda por causa disso. */
+    const ETAPA_COM_TOTAL = 'boleto_e_assinatura';
+
     function preencherColuna(col, arr) {
       const list = col.querySelector('.kanban-list');
       arr.sort(function (a, b) { return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }); });
-      col.querySelector('.cnt').textContent = arr.length + (arr.length === 1 ? ' lead' : ' leads');
+      let cntTxt = arr.length + (arr.length === 1 ? ' lead' : ' leads');
+      if (col.dataset.etapa === ETAPA_COM_TOTAL) {
+        const total = arr.reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0);
+        cntTxt += ' · ' + U.brlShort(total);
+      }
+      col.querySelector('.cnt').textContent = cntTxt;
       arr.forEach(function (l) {
         const card = leadCard(l);
         card.dataset.nome = normalizarBusca(l.nome);
