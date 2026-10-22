@@ -61,7 +61,7 @@
 
       const emAtend = leads.filter(function (l) { return ['primeira_ligacao', 'reuniao_agendada', 'reuniao_realizada', 'proposta_realizada'].indexOf(l.etapa) >= 0; }).length;
       const novos = leads.filter(function (l) { return l.etapa === 'novo'; }).length;
-      const valorVendido = vendasP.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
+      const qtdBoletoAssinatura = leads.filter(function (l) { return l.etapa === 'boleto_e_assinatura'; }).length;
       const valorBoletoAssinatura = leads
         .filter(function (l) { return l.etapa === 'boleto_e_assinatura'; })
         .reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0);
@@ -71,8 +71,7 @@
         C.kpi('Novos leads', String(novos)) +
         C.kpi('Leads em atendimento', String(emAtend)) +
         C.kpi('Propostas', String(propsP.length), 'no período') +
-        C.kpi('Vendas realizadas', String(vendasP.length), 'no período') +
-        C.kpi('Valor total vendido', U.brlShort(valorVendido), 'no período') +
+        C.kpi('Clientes em Boleto e Assinatura', String(qtdBoletoAssinatura)) +
         C.kpi('Valor em Boleto e Assinatura', U.brlShort(valorBoletoAssinatura)) +
         '</div>';
 
