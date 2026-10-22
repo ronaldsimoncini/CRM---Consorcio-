@@ -109,16 +109,23 @@
     const qtdPropostas = cx.propostas.length;
     const leadsComProposta = Object.keys(cx.propostas.reduce(function (m, p) { if (p.leadId) m[p.leadId] = true; return m; }, {})).length;
     const fechamentos = leads.filter(function (l) { return l.etapa === 'fechamento'; }).length;
+    /* REGRA OFICIAL DE VENDA DO FUNIL (não confundir com a tabela `vendas`):
+       um lead só é "venda atual" quando sua etapa atual é boleto_e_assinatura.
+       Fechamento, Proposta Realizada e qualquer outra etapa NÃO contam como
+       venda, mesmo que exista uma linha antiga em `vendas` ligada ao lead.
+       "Clientes em Boleto e Assinatura" e "Valor em Boleto e Assinatura" SÃO,
+       a partir desta regra, a quantidade e o valor oficiais de venda do Funil
+       — não existe um segundo indicador "vendasRealizadas"/"valorVendido"
+       concorrente. Vendas avulsas (sem leadId) nunca entram aqui — elas não
+       representam uma etapa do Funil. */
     const leadsBoleto = leads.filter(function (l) { return l.etapa === 'boleto_e_assinatura'; });
     const clientesBoleto = leadsBoleto.length;
     const valorBoleto = leadsBoleto.reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0);
-    const vendasRealizadas = cx.vendasP.length;
-    const valorVendido = cx.vendasP.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
     return {
       totalLeads: totalLeads, novos: novos, emAtendimento: emAtendimento, primeiraLigacao: primeiraLigacao,
       reuniaoAgendadas: reuniaoAgendadas, reuniaoRealizadas: reuniaoRealizadas, qtdPropostas: qtdPropostas,
       leadsComProposta: leadsComProposta, fechamentos: fechamentos, clientesBoleto: clientesBoleto,
-      valorBoleto: valorBoleto, vendasRealizadas: vendasRealizadas, valorVendido: valorVendido
+      valorBoleto: valorBoleto
     };
   }
 
@@ -142,6 +149,15 @@
         h.data && U.inRange(h.data, cx.r);
     });
   }
+  /* Boleto e Assinatura é a seção OFICIAL de vendas do Funil (decisão aprovada).
+     "atual"/"valorAtual" = estado (lead.etapa==='boleto_e_assinatura' agora),
+     nunca filtrado por data. "entradasPeriodo"/"evolucao" = evento (quando o
+     lead ENTROU nessa etapa, pelo histórico) — é o único jeito "venda no
+     período" é medida; nunca por `vendas.dataVenda`. "porConsultor"/"porOrigem"
+     vêm dos LEADS atualmente em Boleto (estado, sem filtro de data — mesma
+     base de "atual"). "porAdministradora" é um complemento: o lead não tem
+     esse campo, então busca na venda vinculada (quando existe e é válida);
+     sem venda vinculada, entra em "Sem administradora". */
   function comercialBoleto(cx) {
     const leadsBoleto = cx.leads.filter(function (l) { return l.etapa === 'boleto_e_assinatura'; });
     const entradas = comercialEntradasBoleto(cx);
@@ -153,56 +169,59 @@
     const evolucao = Object.keys(porDia).sort().map(function (k) {
       return { key: k, label: U.fmtDate(k).slice(0, 5), valor: porDia[k], qtd: porDia[k] };
     }).slice(-30);
+
+    function agruparLeads(campoOuFn, rotuloVazio) {
+      const m = {};
+      leadsBoleto.forEach(function (l) {
+        const k = (typeof campoOuFn === 'function' ? campoOuFn(l) : l[campoOuFn]) || rotuloVazio;
+        if (!m[k]) m[k] = { nome: k, qtd: 0, valor: 0 };
+        m[k].qtd++; m[k].valor += Number(l.valorCredito) || 0;
+      });
+      return Object.keys(m).map(function (k) { return m[k]; }).sort(function (a, b) { return b.valor - a.valor; });
+    }
+
     return {
       atual: leadsBoleto.length,
       valorAtual: leadsBoleto.reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0),
       entradasPeriodo: entradas.length,
-      evolucao: evolucao
+      evolucao: evolucao,
+      porConsultor: agruparLeads(function (l) { return C.nomeUsuario(l.consultorId); }, '—'),
+      porOrigem: agruparLeads('origem', 'Outros'),
+      porAdministradora: agruparLeads(function (l) {
+        const venda = l.vendaId ? Store.get('vendas', l.vendaId) : null;
+        return venda ? venda.administradora : null;
+      }, 'Sem administradora')
     };
   }
 
-  /* ---------- Parte 5: vendas ---------- */
-  function comercialVendas(cx) {
-    const rows = cx.vendasP;
-    const total = rows.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
-    function agrupar(campo, rotuloVazio) {
-      const m = {};
-      rows.forEach(function (v) {
-        const k = v[campo] || rotuloVazio;
-        if (!m[k]) m[k] = { nome: k, qtd: 0, valor: 0 };
-        m[k].qtd++; m[k].valor += Number(v.valorCredito) || 0;
-      });
-      return Object.keys(m).map(function (k) { return m[k]; }).sort(function (a, b) { return b.valor - a.valor; });
-    }
-    const porConsultorBruto = {};
-    rows.forEach(function (v) {
-      const k = v.consultorId || '—';
-      if (!porConsultorBruto[k]) porConsultorBruto[k] = { nome: C.nomeUsuario(v.consultorId), qtd: 0, valor: 0 };
-      porConsultorBruto[k].qtd++; porConsultorBruto[k].valor += Number(v.valorCredito) || 0;
-    });
-    const porMes = {};
-    rows.forEach(function (v) {
-      const k = (v.dataVenda || '').slice(0, 7);
-      if (!k) return;
-      if (!porMes[k]) porMes[k] = { key: k, label: k, valor: 0, qtd: 0 };
-      porMes[k].valor += Number(v.valorCredito) || 0; porMes[k].qtd++;
-    });
-    return {
-      qtd: rows.length, valor: total,
-      porConsultor: Object.keys(porConsultorBruto).map(function (k) { return porConsultorBruto[k]; }).sort(function (a, b) { return b.valor - a.valor; }),
-      porAdministradora: agrupar('administradora', 'Sem administradora'),
-      porOrigem: agrupar('origem', 'Outros'),
-      evolucao: Object.keys(porMes).sort().map(function (k) { return porMes[k]; }).slice(-14)
-    };
+  /* ---------- Registro de vendas (tabela `vendas`) — CONFERÊNCIA, não é a
+     definição oficial de venda. Classifica cada linha pra deixar claro o
+     porquê ela conta ou não como venda atual do Funil. Vendas avulsas (sem
+     leadId) continuam funcionando normalmente na tela Comercial e aparecem
+     aqui só como registro — nunca entram em "Clientes/Valor em Boleto". */
+  function classificarVenda(v, leadsPorId) {
+    if (!v.leadId) return 'Avulsa (sem lead)';
+    const l = leadsPorId[v.leadId];
+    if (!l) return 'Funil — lead fora do escopo/filtro atual';
+    return l.etapa === 'boleto_e_assinatura'
+      ? 'Funil — válida (lead em Boleto e Assinatura)'
+      : 'Funil — lead fora de Boleto e Assinatura (não conta como venda atual)';
+  }
+  function comercialRegistroVendas(cx) {
+    return cx.vendasP.map(function (v) {
+      return Object.assign({}, v, { classificacao: classificarVenda(v, cx.leadsPorId) });
+    }).sort(function (a, b) { return (b.dataVenda || '') < (a.dataVenda || '') ? -1 : 1; });
   }
 
-  /* ---------- Parte 6: desempenho por consultor (respeita escopo) ---------- */
+  /* ---------- Parte 6: desempenho por consultor (respeita escopo) ----------
+     "vendas"/"valor" = leads do consultor atualmente em boleto_e_assinatura —
+     a mesma regra oficial, nunca a tabela `vendas` diretamente. */
   function comercialConsultores(cx) {
     const todos = C.usuariosConsultores();
     const visiveis = Auth.canSeeAll() ? todos : todos.filter(function (u) { return u.value === Auth.currentId(); });
     return visiveis.map(function (u) {
       const meusLeads = cx.leads.filter(function (l) { return l.consultorId === u.value; });
-      const meusVendas = cx.vendasP.filter(function (v) { return v.consultorId === u.value; });
+      const meusBoleto = meusLeads.filter(function (l) { return l.etapa === 'boleto_e_assinatura'; });
       return {
         nome: u.label,
         leads: meusLeads.length,
@@ -210,25 +229,23 @@
         reunioes: cx.reunioes.filter(function (x) { return cx.consultorDe(x) === u.value; }).length,
         propostas: cx.propostas.filter(function (p) { return p.consultorId === u.value; }).length,
         fechamentos: meusLeads.filter(function (l) { return l.etapa === 'fechamento'; }).length,
-        boleto: meusLeads.filter(function (l) { return l.etapa === 'boleto_e_assinatura'; }).length,
-        vendas: meusVendas.length,
-        valor: meusVendas.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0)
+        boleto: meusBoleto.length,
+        vendas: meusBoleto.length,
+        valor: meusBoleto.reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0)
       };
     }).sort(function (a, b) { return b.valor - a.valor; });
   }
 
-  /* ---------- Parte 7: origens (a venda usa a própria origem registrada, nunca inferida) ---------- */
+  /* ---------- Parte 7: origens ----------
+     "vendas"/"valor" = leads por origem atualmente em boleto_e_assinatura
+     (regra oficial) — não a tabela `vendas`. */
   function comercialOrigens(cx) {
     const m = {};
     cx.leads.forEach(function (l) {
       const k = l.origem || 'Outros';
       if (!m[k]) m[k] = { nome: k, leads: 0, vendas: 0, valor: 0 };
       m[k].leads++;
-    });
-    cx.vendasP.forEach(function (v) {
-      const k = v.origem || 'Outros';
-      if (!m[k]) m[k] = { nome: k, leads: 0, vendas: 0, valor: 0 };
-      m[k].vendas++; m[k].valor += Number(v.valorCredito) || 0;
+      if (l.etapa === 'boleto_e_assinatura') { m[k].vendas++; m[k].valor += Number(l.valorCredito) || 0; }
     });
     return Object.keys(m).map(function (k) { return m[k]; }).sort(function (a, b) { return b.leads - a.leads; });
   }
@@ -320,20 +337,18 @@
       const ind = comercialIndicadores(cx);
       const funil = comercialFunil(cx);
       const boleto = comercialBoleto(cx);
-      const vendas = comercialVendas(cx);
       const consultores = comercialConsultores(cx);
       const origens = comercialOrigens(cx);
       const detalhe = comercialLeadsDetalhe(cx);
+      const registroVendas = comercialRegistroVendas(cx);
 
       let html = '<div class="sub muted">Período analisado: ' + U.fmtDate(cx.r.ini) + ' a ' + U.fmtDate(cx.r.fim) +
         ' · Filtros: ' + U.esc(filtrosTexto(state)) + '</div>';
 
       html += '<div class="kpi-row wide">' +
         C.kpi('Total de leads', String(ind.totalLeads)) +
-        C.kpi('Vendas realizadas', String(ind.vendasRealizadas), 'no período') +
-        C.kpi('Valor vendido', U.brlShort(ind.valorVendido), 'no período') +
-        C.kpi('Clientes em Boleto e Assinatura', String(ind.clientesBoleto), 'estado atual') +
-        C.kpi('Valor em Boleto e Assinatura', U.brlShort(ind.valorBoleto), 'estado atual') +
+        C.kpi('Vendas do Funil (Boleto e Assinatura)', String(ind.clientesBoleto), 'estado atual — regra oficial') +
+        C.kpi('Valor vendido (Boleto e Assinatura)', U.brlShort(ind.valorBoleto), 'estado atual — regra oficial') +
         '</div>';
 
       html += '<div class="card"><h3 class="card-title">Indicadores do funil</h3><div class="table-wrap"><table class="table"><tbody>' +
@@ -344,7 +359,7 @@
         linhaKpi('Reuniões realizadas', ind.reuniaoRealizadas) +
         linhaKpi('Propostas registradas', ind.qtdPropostas) +
         linhaKpi('Leads com proposta', ind.leadsComProposta) +
-        linhaKpi('Fechamentos (etapa atual — não é o mesmo que venda realizada)', ind.fechamentos) +
+        linhaKpi('Fechamentos (etapa atual — NÃO é venda)', ind.fechamentos) +
         '</tbody></table></div>' +
         '<div class="muted" style="margin-top:8px;font-size:12px">"Não respondeu à cadência" não possui uma etapa estruturada no CRM hoje — não é exibido como indicador oficial, para evitar um número inventado.</div>' +
         '</div>';
@@ -355,20 +370,17 @@
         C.barChart(funil.map(function (e) { return { key: e.key, label: e.label.slice(0, 10), valor: e.qtd, qtd: e.qtd }; })) +
         '</div>';
 
-      html += '<div class="card"><h3 class="card-title">Boleto e Assinatura</h3>' +
+      html += '<div class="card"><h3 class="card-title">Boleto e Assinatura — seção oficial de vendas do Funil</h3>' +
+        '<div class="muted" style="font-size:12px;margin-bottom:8px">Regra de negócio: um lead só é considerado venda quando está atualmente na etapa Boleto e Assinatura. Fechamento e qualquer outra etapa não contam como venda.</div>' +
         '<div class="kpi-row wide">' +
-        C.kpi('Clientes atualmente', String(boleto.atual), 'estado atual') +
-        C.kpi('Valor atual', U.brlShort(boleto.valorAtual), 'estado atual') +
-        C.kpi('Entradas no período', String(boleto.entradasPeriodo), 'evento') +
+        C.kpi('Vendas atuais (clientes)', String(boleto.atual), 'estado atual') +
+        C.kpi('Valor vendido atual', U.brlShort(boleto.valorAtual), 'estado atual') +
+        C.kpi('Vendas no período (entradas)', String(boleto.entradasPeriodo), 'evento — data do histórico') +
         '</div>' +
-        '<div class="muted" style="font-size:12px;margin-bottom:6px">Evolução das entradas (por dia) no período selecionado:</div>' +
-        C.barChart(boleto.evolucao) + '</div>';
-
-      html += '<div class="card"><h3 class="card-title">Vendas</h3>' +
-        '<div class="kpi-row wide">' + C.kpi('Quantidade', String(vendas.qtd)) + C.kpi('Valor vendido', U.brlShort(vendas.valor)) + '</div>' +
-        '<div class="muted" style="font-size:12px;margin-bottom:6px">Evolução mensal:</div>' + C.barChart(vendas.evolucao) +
-        '<div class="grid-2">' + tabelaSimples('Por consultor', vendas.porConsultor, 'nome') + tabelaSimples('Por administradora', vendas.porAdministradora, 'nome') + '</div>' +
-        tabelaSimples('Por origem', vendas.porOrigem, 'nome') +
+        '<div class="muted" style="font-size:12px;margin-bottom:6px">Evolução das vendas no período (data em que o lead entrou em Boleto e Assinatura):</div>' +
+        C.barChart(boleto.evolucao) +
+        '<div class="grid-2">' + tabelaSimples('Por consultor', boleto.porConsultor, 'nome') + tabelaSimples('Por administradora (da venda vinculada)', boleto.porAdministradora, 'nome') + '</div>' +
+        tabelaSimples('Por origem', boleto.porOrigem, 'nome') +
         '</div>';
 
       html += '<div class="card"><h3 class="card-title">Desempenho por consultor</h3><div class="table-wrap"><table class="table"><thead><tr>' +
@@ -382,6 +394,14 @@
       html += '<div class="card"><h3 class="card-title">Origens</h3><div class="table-wrap"><table class="table"><thead><tr><th>Origem</th><th class="num">Leads</th><th class="num">Vendas</th><th class="num">Valor</th></tr></thead><tbody>' +
         origens.map(function (x) { return '<tr><td>' + U.esc(x.nome) + '</td><td class="num">' + x.leads + '</td><td class="num">' + x.vendas + '</td><td class="num">' + U.brl(x.valor) + '</td></tr>'; }).join('') +
         '</tbody></table></div>' + (origens.length ? '' : '<div class="empty">Sem dados.</div>') + '</div>';
+
+      html += '<div class="card table-wrap"><h3 class="card-title">Registro de vendas — conferência (' + registroVendas.length + ')</h3>' +
+        '<div class="muted" style="font-size:12px;margin-bottom:8px">Lista TODAS as linhas da tabela de vendas no período (inclusive avulsas e vendas antigas cujo lead já saiu de Boleto e Assinatura) — é um registro de auditoria, NÃO a definição oficial de venda. A quantidade/valor oficiais estão na seção "Boleto e Assinatura" acima.</div>' +
+        '<table class="table"><thead><tr><th>Data</th><th>Cliente</th><th>Consultor</th><th class="num">Valor</th><th>Classificação</th></tr></thead><tbody>' +
+        registroVendas.map(function (v) {
+          return '<tr><td>' + U.fmtDate(v.dataVenda) + '</td><td>' + U.esc(v.cliente || '—') + '</td><td>' + U.esc(C.nomeUsuario(v.consultorId)) +
+            '</td><td class="num">' + U.brl(v.valorCredito) + '</td><td>' + U.esc(v.classificacao) + '</td></tr>';
+        }).join('') + '</tbody></table>' + (registroVendas.length ? '' : '<div class="empty">Nenhuma venda registrada no período.</div>') + '</div>';
 
       html += '<div class="card table-wrap"><h3 class="card-title">Detalhamento dos leads (' + detalhe.length + ')</h3><table class="table"><thead><tr>' +
         '<th>Nome</th><th>Telefone</th><th>Consultor</th><th>Origem</th><th>Etapa</th><th class="num">Valor</th><th>Criado em</th></tr></thead><tbody>' +
@@ -418,10 +438,10 @@
     const ind = comercialIndicadores(cx);
     const funil = comercialFunil(cx);
     const boleto = comercialBoleto(cx);
-    const vendas = comercialVendas(cx);
     const consultores = comercialConsultores(cx);
     const origens = comercialOrigens(cx);
     const detalhe = comercialLeadsDetalhe(cx);
+    const registroVendas = comercialRegistroVendas(cx);
     function card(l, v) { return '<div class="c"><span>' + U.esc(l) + '</span><b>' + v + '</b></div>'; }
 
     let h = '<div class="capa">' +
@@ -435,24 +455,24 @@
     h += '<h2>Resumo executivo</h2><div class="cards">' +
       card('Total de leads', ind.totalLeads) + card('Novos leads', ind.novos) + card('Leads em atendimento', ind.emAtendimento) +
       card('Primeira ligação', ind.primeiraLigacao) + card('Reuniões agendadas', ind.reuniaoAgendadas) + card('Reuniões realizadas', ind.reuniaoRealizadas) +
-      card('Propostas', ind.qtdPropostas) + card('Fechamentos', ind.fechamentos) + card('Clientes em Boleto e Assinatura', ind.clientesBoleto) +
-      card('Valor em Boleto e Assinatura', money(ind.valorBoleto)) + card('Vendas realizadas', ind.vendasRealizadas) + card('Valor vendido', money(ind.valorVendido)) +
-      '</div><div class="sub" style="margin-top:6px">"Não respondeu à cadência" não possui etapa estruturada no CRM hoje — não exibido como número oficial.</div>';
+      card('Propostas', ind.qtdPropostas) + card('Fechamentos (NÃO é venda)', ind.fechamentos) + card('Vendas do Funil (Boleto e Assinatura)', ind.clientesBoleto) +
+      card('Valor vendido (Boleto e Assinatura)', money(ind.valorBoleto)) +
+      '</div><div class="sub" style="margin-top:6px">Regra oficial: um lead só é considerado venda quando está atualmente em Boleto e Assinatura. "Não respondeu à cadência" não possui etapa estruturada no CRM hoje — não exibido como número oficial.</div>';
 
     h += '<div class="pagebreak"></div><h2>Funil comercial</h2><table><tr><th>Etapa</th><th>Quantidade</th><th>%</th></tr>' +
       funil.map(function (e) { return '<tr><td>' + U.esc(e.label) + '</td><td class="num">' + e.qtd + '</td><td class="num">' + e.pct.toFixed(1) + '%</td></tr>'; }).join('') + '</table>';
 
-    h += '<h2>Boleto e Assinatura</h2><div class="cards">' +
-      card('Clientes atualmente (estado atual)', boleto.atual) + card('Valor atual (estado atual)', money(boleto.valorAtual)) +
-      card('Entradas no período (evento)', boleto.entradasPeriodo) + '</div>';
-
-    h += '<div class="pagebreak"></div><h2>Vendas</h2><div class="cards">' + card('Quantidade', vendas.qtd) + card('Valor vendido', money(vendas.valor)) + '</div>' +
+    h += '<h2>Boleto e Assinatura — seção oficial de vendas do Funil</h2>' +
+      '<div class="sub">Um lead só é considerado venda quando está atualmente nesta etapa. Fechamento e qualquer outra etapa não contam.</div>' +
+      '<div class="cards">' +
+      card('Vendas atuais (estado atual)', boleto.atual) + card('Valor vendido atual (estado atual)', money(boleto.valorAtual)) +
+      card('Vendas no período (evento — entrada pelo histórico)', boleto.entradasPeriodo) + '</div>' +
       '<h3>Por consultor</h3><table><tr><th>Consultor</th><th>Vendas</th><th>Valor</th></tr>' +
-      vendas.porConsultor.map(function (x) { return '<tr><td>' + U.esc(x.nome) + '</td><td class="num">' + x.qtd + '</td><td class="num">' + money(x.valor) + '</td></tr>'; }).join('') + '</table>' +
-      '<h3>Por administradora</h3><table><tr><th>Administradora</th><th>Vendas</th><th>Valor</th></tr>' +
-      vendas.porAdministradora.map(function (x) { return '<tr><td>' + U.esc(x.nome) + '</td><td class="num">' + x.qtd + '</td><td class="num">' + money(x.valor) + '</td></tr>'; }).join('') + '</table>' +
+      boleto.porConsultor.map(function (x) { return '<tr><td>' + U.esc(x.nome) + '</td><td class="num">' + x.qtd + '</td><td class="num">' + money(x.valor) + '</td></tr>'; }).join('') + '</table>' +
+      '<h3>Por administradora (da venda vinculada)</h3><table><tr><th>Administradora</th><th>Vendas</th><th>Valor</th></tr>' +
+      boleto.porAdministradora.map(function (x) { return '<tr><td>' + U.esc(x.nome) + '</td><td class="num">' + x.qtd + '</td><td class="num">' + money(x.valor) + '</td></tr>'; }).join('') + '</table>' +
       '<h3>Por origem</h3><table><tr><th>Origem</th><th>Vendas</th><th>Valor</th></tr>' +
-      vendas.porOrigem.map(function (x) { return '<tr><td>' + U.esc(x.nome) + '</td><td class="num">' + x.qtd + '</td><td class="num">' + money(x.valor) + '</td></tr>'; }).join('') + '</table>';
+      boleto.porOrigem.map(function (x) { return '<tr><td>' + U.esc(x.nome) + '</td><td class="num">' + x.qtd + '</td><td class="num">' + money(x.valor) + '</td></tr>'; }).join('') + '</table>';
 
     h += '<div class="pagebreak"></div><h2>Desempenho por consultor</h2><table><tr><th>Consultor</th><th>Leads</th><th>1ª Ligação</th><th>Reuniões</th><th>Propostas</th><th>Fechamentos</th><th>Boleto</th><th>Vendas</th><th>Valor</th></tr>' +
       consultores.map(function (x) {
@@ -462,6 +482,14 @@
 
     h += '<h2>Origens</h2><table><tr><th>Origem</th><th>Leads</th><th>Vendas</th><th>Valor</th></tr>' +
       origens.map(function (x) { return '<tr><td>' + U.esc(x.nome) + '</td><td class="num">' + x.leads + '</td><td class="num">' + x.vendas + '</td><td class="num">' + money(x.valor) + '</td></tr>'; }).join('') + '</table>';
+
+    h += '<div class="pagebreak"></div><h2>Registro de vendas — conferência</h2>' +
+      '<div class="sub">Todas as linhas da tabela de vendas no período (inclusive avulsas e vendas antigas cujo lead já saiu de Boleto e Assinatura). É um registro de auditoria, NÃO a definição oficial de venda.</div>' +
+      '<table><thead><tr><th>Data</th><th>Cliente</th><th>Consultor</th><th>Valor</th><th>Classificação</th></tr></thead><tbody>' +
+      registroVendas.map(function (v) {
+        return '<tr><td>' + U.fmtDate(v.dataVenda) + '</td><td>' + U.esc(v.cliente || '—') + '</td><td>' + U.esc(C.nomeUsuario(v.consultorId)) +
+          '</td><td class="num">' + money(v.valorCredito) + '</td><td>' + U.esc(v.classificacao) + '</td></tr>';
+      }).join('') + '</tbody></table>';
 
     h += '<div class="pagebreak"></div><h2>Detalhamento dos leads (' + detalhe.length + ')</h2><table><thead><tr><th>Nome</th><th>Telefone</th><th>Consultor</th><th>Origem</th><th>Etapa</th><th>Valor</th><th>Criado em</th><th>Observações</th></tr></thead><tbody>' +
       detalhe.map(function (d) {
@@ -506,7 +534,6 @@
     const ind = comercialIndicadores(cx);
     const funil = comercialFunil(cx);
     const boleto = comercialBoleto(cx);
-    const vendas = comercialVendas(cx);
     const consultores = comercialConsultores(cx);
     const detalhe = comercialLeadsDetalhe(cx);
     const histLinhas = comercialHistoricoLinhas(cx);
@@ -530,13 +557,11 @@
       ['Reuniões realizadas', ind.reuniaoRealizadas],
       ['Propostas registradas', ind.qtdPropostas],
       ['Leads com proposta', ind.leadsComProposta],
-      ['Fechamentos (etapa atual)', ind.fechamentos],
-      ['Clientes em Boleto e Assinatura', ind.clientesBoleto],
-      ['Valor em Boleto e Assinatura', ind.valorBoleto],
-      ['Vendas realizadas', ind.vendasRealizadas],
-      ['Valor vendido', ind.valorVendido]
+      ['Fechamentos (etapa atual — NÃO é venda)', ind.fechamentos],
+      ['Vendas do Funil (Boleto e Assinatura — regra oficial)', ind.clientesBoleto],
+      ['Valor vendido (Boleto e Assinatura — regra oficial)', ind.valorBoleto]
     ]);
-    aplicarMoeda(wsResumo, 16, 16, 1); aplicarMoeda(wsResumo, 18, 18, 1);
+    aplicarMoeda(wsResumo, 16, 16, 1);
     wsResumo['!cols'] = [{ wch: 34 }, { wch: 26 }];
     XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo');
 
@@ -583,17 +608,20 @@
     wsProp['!cols'] = propHeaders.map(function (hh) { return { wch: Math.min(Math.max(hh.length + 4, 12), 24) }; });
     XLSX.utils.book_append_sheet(wb, wsProp, 'Propostas');
 
-    /* 6. Vendas */
+    /* 6. Vendas — REGISTRO/CONFERÊNCIA (ledger da tabela `vendas`), não a definição
+       oficial de venda. A coluna "Classificação" diz se cada linha conta ou não como
+       venda atual do Funil (regra: lead.etapa === 'boleto_e_assinatura'); avulsas
+       (sem leadId) continuam normalmente, só não entram no indicador do Funil. */
     const vHeaders = ['ID', 'Lead', 'Cliente', 'Telefone', 'WhatsApp', 'Consultor', 'Administradora', 'Produto', 'Valor crédito', 'Valor parcela',
-      'Número da cota', 'Data da venda', 'Origem', 'Indicador', 'Comissão', 'Observações', 'Status'];
-    const vRows = [vHeaders].concat(cx.vendasP.map(function (v) {
+      'Número da cota', 'Data da venda', 'Origem', 'Indicador', 'Comissão', 'Observações', 'Status', 'Classificação'];
+    const vRows = [vHeaders].concat(comercialRegistroVendas(cx).map(function (v) {
       return [v.id, v.leadId || '', v.cliente || '', v.telefone || '', v.whatsapp || '', C.nomeUsuario(v.consultorId), v.administradora || '',
         v.produtoId ? C.nomeProduto(v.produtoId) : '', v.valorCredito || 0, v.valorParcela || 0, v.numeroCota || '', fmtDataXLS(v.dataVenda),
-        v.origem || '', v.indicadorId ? C.nomeIndicador(v.indicadorId) : '', v.comissao || 0, v.obs || '', 'Venda Realizada'];
+        v.origem || '', v.indicadorId ? C.nomeIndicador(v.indicadorId) : '', v.comissao || 0, v.obs || '', 'Venda Realizada', v.classificacao];
     }));
     const wsVendas = folhaComFiltro(vRows);
     aplicarMoeda(wsVendas, 1, vRows.length - 1, 8); aplicarMoeda(wsVendas, 1, vRows.length - 1, 9); aplicarMoeda(wsVendas, 1, vRows.length - 1, 14);
-    wsVendas['!cols'] = vHeaders.map(function (hh) { return { wch: Math.min(Math.max(hh.length + 4, 12), 26) }; });
+    wsVendas['!cols'] = vHeaders.map(function (hh) { return { wch: Math.min(Math.max(hh.length + 4, 12), 32) }; });
     XLSX.utils.book_append_sheet(wb, wsVendas, 'Vendas');
 
     /* 7. Boleto e Assinatura */
@@ -667,8 +695,20 @@
         : state.periodo === 'custom' ? U.range('custom', { ini: state.ini, fim: state.fim })
           : U.range(state.periodo);
       const mn = U.parseNumber(state.min), mx = U.parseNumber(state.max);
+      /* Regra oficial de venda do Funil: um lead só conta quando está
+         atualmente em boleto_e_assinatura (não mais ao entrar em fechamento).
+         Vendas avulsas (sem leadId) continuam contando normalmente — não têm
+         etapa pra checar. Venda do Funil cujo lead já saiu de Boleto e
+         Assinatura (ex.: venda antiga de quando ainda era em Fechamento) não
+         conta mais aqui, mesmo que a linha continue existindo em `vendas`. */
+      const leadsPorId = {};
+      Auth.scope(Store.all('leads')).forEach(function (l) { leadsPorId[l.id] = l; });
       const rows = Auth.scope(Store.all('vendas')).filter(function (v) {
         if (v.status !== 'venda_realizada') return false;
+        if (v.leadId) {
+          const l = leadsPorId[v.leadId];
+          if (!l || l.etapa !== 'boleto_e_assinatura') return false;
+        }
         if (!U.inRange(v.dataVenda, r)) return false;
         if (state.consultor && v.consultorId !== state.consultor) return false;
         if (state.adm && v.administradora !== state.adm) return false;
@@ -714,6 +754,7 @@
 
       out.innerHTML =
         '<div class="sub muted">Período: ' + U.fmtDate(cx.r.ini) + ' a ' + U.fmtDate(cx.r.fim) + '</div>' +
+        '<div class="muted" style="font-size:12px;margin-bottom:10px">Regra oficial: vendas do Funil só contam enquanto o lead está em Boleto e Assinatura. Vendas avulsas (sem lead) continuam listadas normalmente. Para a visão oficial de vendas, use a aba "Relatório Comercial".</div>' +
         '<div class="kpi-row wide">' +
         C.kpi('Total de vendas', String(s.qtd)) +
         C.kpi('Valor total vendido', U.brlShort(s.total)) +
@@ -796,12 +837,25 @@
     const leads = Store.all('leads');
     const vendas = Store.all('vendas').filter(function (v) { return v.status === 'venda_realizada'; });
     const props = Store.all('propostas');
+    const leadsPorId = {};
+    leads.forEach(function (l) { leadsPorId[l.id] = l; });
 
     const linhas = inds.map(function (ind) {
       const seusLeads = leads.filter(function (l) { return l.indicadorId === ind.id; });
       const leadIds = seusLeads.reduce(function (m, l) { m[l.id] = true; return m; }, {});
       const propostas = props.filter(function (p) { return leadIds[p.leadId]; }).length;
-      const suasVendas = vendas.filter(function (v) { return v.indicadorId === ind.id || (v.leadId && leadIds[v.leadId]); });
+      /* Regra oficial de venda do Funil: venda ligada a um lead só conta se
+         o lead está atualmente em boleto_e_assinatura. Venda avulsa com
+         indicadorId direto (sem leadId) continua contando normalmente —
+         ela não representa uma etapa do Funil. */
+      const suasVendas = vendas.filter(function (v) {
+        if (v.indicadorId === ind.id && !v.leadId) return true;
+        if (v.leadId && leadIds[v.leadId]) {
+          const l = leadsPorId[v.leadId];
+          return !!l && l.etapa === 'boleto_e_assinatura';
+        }
+        return false;
+      });
       const valor = suasVendas.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
       return {
         ind: ind, leads: seusLeads.length, propostas: propostas, vendas: suasVendas.length, valor: valor,

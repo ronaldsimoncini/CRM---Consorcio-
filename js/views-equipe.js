@@ -18,15 +18,17 @@
     function draw() {
       const pv = bar.querySelector('#p').value;
       const r = pv === 'tudo' ? U.range('tudo') : U.range(pv);
-      const leads = Store.all('leads').filter(function (l) { return U.inRange((l.criadoEm || '').slice(0, 10), r); });
+      const todosLeads = Store.all('leads');
+      const leads = todosLeads.filter(function (l) { return U.inRange((l.criadoEm || '').slice(0, 10), r); });
       const props = Store.all('propostas').filter(function (p) { return U.inRange((p.data || p.criadoEm || '').slice(0, 10), r); });
-      const vendas = Store.all('vendas').filter(function (v) { return v.status === 'venda_realizada' && U.inRange(v.dataVenda, r); });
 
+      /* REGRA OFICIAL: venda = lead atualmente em boleto_e_assinatura (estado,
+         sem filtro de período) — não mais a tabela `vendas` por dataVenda. */
       const rows = consultores().map(function (u) {
         const nl = leads.filter(function (l) { return l.consultorId === u.id; }).length;
         const np = props.filter(function (p) { return p.consultorId === u.id; }).length;
-        const vs = vendas.filter(function (v) { return v.consultorId === u.id; });
-        const valor = vs.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
+        const vs = todosLeads.filter(function (l) { return l.consultorId === u.id && l.etapa === 'boleto_e_assinatura'; });
+        const valor = vs.reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0);
         return { u: u, nl: nl, np: np, nv: vs.length, valor: valor };
       }).sort(function (a, b) { return (a.u.nome || '').localeCompare(b.u.nome || ''); });
 

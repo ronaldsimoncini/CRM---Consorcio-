@@ -68,7 +68,12 @@
     if (nova === 'reuniao_agendada') return H.reuniaoForm(lead);
     if (nova === 'reuniao_realizada') return H.reuniaoRealizadaForm(lead);
     if (nova === 'proposta_realizada') return H.propostaForm(lead);
-    if (nova === 'fechamento') {
+    /* REGRA OFICIAL: a venda só é registrada ao entrar em "boleto_e_assinatura".
+       "fechamento" não é mais especial — é uma etapa comercial normal, sem
+       formulário, sem criar venda nem vendaId (cai no caminho genérico abaixo). */
+    if (nova === 'boleto_e_assinatura') {
+      /* já tem venda vinculada (ex.: voltou para Boleto depois de ter saído) ->
+         não abre o formulário de novo, não duplica a venda */
       if (lead.vendaId) { transitionEtapa(lead, nova); return; }
       return H.fecharVendaForm(lead);
     }
@@ -277,6 +282,11 @@
     });
   };
 
+  /* Abre o formulário de venda — hoje chamado só ao entrar em
+     "boleto_e_assinatura" (regra oficial: venda = lead em Boleto e Assinatura).
+     Cancelar o modal (ou fechar sem salvar) não executa onSave: nenhuma venda
+     é criada, nenhum vendaId é gravado, e o lead permanece na etapa em que
+     estava — nada fica parcialmente salvo. */
   H.fecharVendaForm = function (lead, after) {
     const p = lead.proposta || {};
     const b = buildForm(
@@ -297,6 +307,10 @@
       saveLabel: 'Registrar venda', onSave: function () {
         const cred = fnum(b, 'cred');
         if (!cred) { alert('Informe o valor do crédito.'); return false; }
+        /* trava contra duplicidade (defesa redundante com a de moveLead()): se o
+           lead já tem uma venda vinculada, só move para Boleto e Assinatura —
+           nunca cria uma segunda venda */
+        if (lead.vendaId) { transitionEtapa(lead, 'boleto_e_assinatura'); if (after) after(); return; }
         Store.batch(function () {
           const v = {
             leadId: lead.id, cliente: fval(b, 'cliente') || lead.nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'),
@@ -308,7 +322,7 @@
           v.metaId = C.metaParaVenda(v);
           comOwner(v, ownerDoLead(lead, v.consultorId));
           const venda = Store.insert('vendas', v);
-          transitionEtapa(lead, 'fechamento');
+          transitionEtapa(lead, 'boleto_e_assinatura');
           Store.update('leads', lead.id, { vendaId: venda.id });
           Store.logHist(lead.id, 'venda', 'Venda registrada: ' + U.brl(cred) +
             (v.metaId ? ' — conta na meta "' + C.nomeMeta(v.metaId) + '"' : ''), Auth.currentId());
@@ -550,7 +564,7 @@
     mk('🔁 Retomar contato', function () { H.retomarContatoForm(lead, reopen); });
     mk('📄 Criar proposta', function () { H.propostaForm(lead, reopen); });
     mk('↔️ Mover etapa', function () { H.moverEtapaForm(lead, reopen); });
-    if (lead.etapa !== 'fechamento') mk('✅ Fechar venda', function () { H.fecharVendaForm(lead, reopen); });
+    if (lead.etapa !== 'boleto_e_assinatura') mk('✅ Fechar venda', function () { H.fecharVendaForm(lead, reopen); });
     if (lead.etapa !== 'nao_fez') mk('🚫 Não realizado', function () { H.motivoForm(lead, reopen); });
 
     const del = U.el('<button class="qa" style="color:#b3261e">🗑️ Excluir lead</button>');

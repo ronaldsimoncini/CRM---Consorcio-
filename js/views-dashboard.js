@@ -117,8 +117,11 @@
         C.usuariosConsultores().map(function (o) {
           const nl = leadsP.filter(f('consultorId', o.value)).length;
           const np = propsP.filter(f('consultorId', o.value)).length;
-          const vs = vendasP.filter(f('consultorId', o.value));
-          const val = vs.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
+          /* REGRA OFICIAL: venda = lead atualmente em boleto_e_assinatura (estado,
+             não filtrado por período — mesma base de "Clientes em Boleto e
+             Assinatura" acima). Não usa mais a tabela `vendas` diretamente. */
+          const vs = leads.filter(function (l) { return l.consultorId === o.value && l.etapa === 'boleto_e_assinatura'; });
+          const val = vs.reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0);
           if (!nl && !np && !vs.length) return '';
           return '<tr><td>' + U.esc(o.label) + '</td><td class="num">' + nl + '</td><td class="num">' + np + '</td><td class="num">' + vs.length + '</td><td class="num">' + U.brlShort(val) + '</td></tr>';
         }).join('') + '</tbody></table></div></div></div>';
@@ -132,9 +135,16 @@
 
       host.innerHTML = html;
 
-      /* vendas recentes (cards) */
+      /* vendas recentes (cards) — só vendas que ainda contam pela regra oficial:
+         avulsa (sem leadId) ou lead atualmente em boleto_e_assinatura. Uma venda
+         antiga cujo lead já saiu de Boleto (ex.: segue só em Fechamento) não
+         aparece mais aqui. */
       const rv = host.querySelector('#rv');
-      const recV = vendasP.slice().sort(function (a, b) { return (b.dataVenda || '') < (a.dataVenda || '') ? -1 : 1; }).slice(0, 8);
+      const recV = vendasP.filter(function (v) {
+        if (!v.leadId) return true;
+        const l = leadsPorId[v.leadId];
+        return !!l && l.etapa === 'boleto_e_assinatura';
+      }).sort(function (a, b) { return (b.dataVenda || '') < (a.dataVenda || '') ? -1 : 1; }).slice(0, 8);
       if (!recV.length) rv.innerHTML = '<div class="empty">Nenhuma venda no período.</div>';
       recV.forEach(function (v) {
         rv.appendChild(U.el('<div class="recent-card">' +
