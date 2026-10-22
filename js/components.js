@@ -155,12 +155,25 @@ window.C = (function () {
        META      = valor objetivo (não muda)
        VENDIDO   = soma das vendas ligadas à meta
        RESTANTE  = META - VENDIDO  (nunca abaixo de zero)               */
+  /* REGRA OFICIAL (funil): uma venda do Funil só existe enquanto o lead está
+     atualmente na etapa boleto_e_assinatura — uma linha antiga em `vendas`
+     cujo lead já saiu dessa etapa (ex.: voltou a aparecer só em Fechamento)
+     NÃO soma mais na meta, mesmo que a linha continue existindo (nada é
+     apagado). O valor somado é sempre lead.valorCredito, nunca
+     venda.valorCredito. A meta a que cada lead pertence é a mesma já
+     decidida na criação da venda (venda.metaId, calculado por
+     metaParaVenda() ao salvar — respeita produto/consultor/período exatamente
+     como antes); só a FONTE do "venda ainda vale" mudou, não esse casamento.
+     Lead sem vendaId (nunca passou pelo formulário oficial de venda) não é
+     contado em nenhuma meta. Vendas avulsas (sem leadId) nunca entram aqui. */
   function computeMeta(meta) {
-    const vendas = Store.all('vendas').filter(function (v) {
-      return v.metaId === meta.id && v.status === 'venda_realizada';
+    const leadsBoleto = Store.all('leads').filter(function (l) { return l.etapa === 'boleto_e_assinatura' && l.vendaId; });
+    const leadsDaMeta = leadsBoleto.filter(function (l) {
+      const v = Store.get('vendas', l.vendaId);
+      return !!v && v.metaId === meta.id;
     });
-    const vendido = vendas.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
-    const qtd = vendas.length;
+    const vendido = leadsDaMeta.reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0);
+    const qtd = leadsDaMeta.length;
     const valorMeta = Number(meta.valorMeta) || 0;
     const percentual = U.pct(vendido, valorMeta);
     const restante = Math.max(valorMeta - vendido, 0);
@@ -190,7 +203,7 @@ window.C = (function () {
       restante: restante, falta: restante, excedente: excedente,
       diasTotais: diasTotais, diasDecorridos: diasDecorridos, diasRestantes: diasRestantes,
       ritmoDia: ritmoDia, mediaNecessariaDia: mediaNecessariaDia, dataProjecao: dataProjecao,
-      noRitmo: noRitmo, status: status, vendas: vendas
+      noRitmo: noRitmo, status: status, vendas: leadsDaMeta
     };
   }
 

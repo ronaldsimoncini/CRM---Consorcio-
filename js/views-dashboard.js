@@ -1,26 +1,39 @@
 /* Dashboard — visão operacional de leads e vendas (SEM meta) */
 (function () {
-  /* Agrupa, por dia/semana/mês, os eventos de HISTÓRICO que marcam a entrada
-     de um lead na etapa boleto_e_assinatura. A data do evento é historico.data
-     (o momento real da troca de etapa) — NÃO leads.criadoEm, NÃO vendas. Um
-     lead que depois saiu da etapa continua contando na data em que entrou.
-     `leadsPorId` já reflete o escopo/filtros de consultor e origem aplicados
-     em draw() — histórico cujo lead não passa nesses filtros (ou não existe
-     mais) fica de fora, com segurança. */
+  /* Agrupa, por dia/semana/mês, as VENDAS OFICIAIS DO FUNIL (um lead
+     atualmente em boleto_e_assinatura = 1 venda, nunca mais de uma, mesmo
+     que o histórico tenha vários eventos de entrada/saída/reentrada para o
+     mesmo lead). Por isso: primeiro acha, por lead, a entrada MAIS RECENTE
+     em boleto_e_assinatura (historico.data) — e só considera esse lead se
+     ele AINDA estiver atualmente nessa etapa (leadsPorId[...].etapa); um
+     lead que já saiu não aparece mais no gráfico, mesmo que tenha entrado
+     no passado. Isso garante que a soma de todas as barras nunca passe da
+     contagem oficial (`leads atualmente em boleto_e_assinatura`.length) —
+     não é mais uma contagem de eventos de histórico. `leadsPorId` já
+     reflete o escopo/filtros de consultor e origem aplicados em draw(). */
   function bucketEntradasBoleto(historico, leadsPorId, r, modo) {
     const sufixo = 'para ' + Store.etapaLabel('boleto_e_assinatura');
-    const map = {};
+    const entradaMaisRecentePorLead = {};
     historico.forEach(function (h) {
       if (h.tipo !== 'mudanca_etapa') return;
       if (typeof h.texto !== 'string' || !h.texto.endsWith(sufixo)) return;
-      if (!h.data || !U.inRange(h.data, r)) return;
-      if (!leadsPorId[h.leadId]) return;
-      const d = U.dateFromISO(h.data);
+      if (!h.data) return;
+      const lead = leadsPorId[h.leadId];
+      if (!lead || lead.etapa !== 'boleto_e_assinatura') return; // saiu da etapa ou fora do escopo/filtro: não conta
+      if (!entradaMaisRecentePorLead[h.leadId] || h.data > entradaMaisRecentePorLead[h.leadId]) {
+        entradaMaisRecentePorLead[h.leadId] = h.data;
+      }
+    });
+    const map = {};
+    Object.keys(entradaMaisRecentePorLead).forEach(function (leadId) {
+      const data = entradaMaisRecentePorLead[leadId];
+      if (!U.inRange(data, r)) return;
+      const d = U.dateFromISO(data);
       if (!d) return;
       let key, label;
-      if (modo === 'mes') { key = String(h.data).slice(0, 7); label = d.toLocaleDateString('pt-BR', { month: 'short' }); }
+      if (modo === 'mes') { key = String(data).slice(0, 7); label = d.toLocaleDateString('pt-BR', { month: 'short' }); }
       else if (modo === 'semana') { const s = U.startOfWeek(d); key = U.iso(s); label = U.fmtDate(key).slice(0, 5); }
-      else { key = String(h.data).slice(0, 10); label = U.fmtDate(h.data).slice(0, 5); }
+      else { key = String(data).slice(0, 10); label = U.fmtDate(data).slice(0, 5); }
       if (!map[key]) map[key] = { key: key, label: label, valor: 0, qtd: 0 };
       map[key].valor += 1;
       map[key].qtd += 1;
