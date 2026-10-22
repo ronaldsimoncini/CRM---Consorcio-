@@ -128,14 +128,21 @@ window.U = (function () {
     if (!w) { alert('Permita pop-ups neste site para gerar o PDF.'); return; }
     w.document.write(
       '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' +
-      'body{font-family:Arial,Helvetica,sans-serif;color:#1b2430;margin:26px;font-size:12px}' +
-      'h1{font-size:19px;margin:0 0 2px}h2{font-size:13px;margin:18px 0 6px;border-bottom:2px solid #1E2D47;padding-bottom:3px}' +
-      '.sub{color:#666;margin-bottom:14px}' +
-      'table{width:100%;border-collapse:collapse;margin:8px 0;font-size:11px}' +
+      '@page{size:A4;margin:16mm 14mm}' +
+      'body{font-family:Arial,Helvetica,sans-serif;color:#1b2430;margin:0;font-size:12px;line-height:1.4}' +
+      '.capa{padding:40px 0 24px;border-bottom:3px solid #1E2D47;margin-bottom:18px}' +
+      'h1{font-size:24px;margin:0 0 4px;color:#1E2D47}' +
+      'h2{font-size:14px;margin:20px 0 8px;border-bottom:2px solid #1E2D47;padding-bottom:4px;color:#1E2D47}' +
+      'h3{font-size:12px;margin:14px 0 6px;color:#1E2D47}' +
+      '.sub{color:#666;margin-bottom:4px}' +
+      'table{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:10.5px;page-break-inside:auto}' +
+      'thead{display:table-header-group}tr{page-break-inside:avoid;page-break-after:auto}' +
       'th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}th{background:#1E2D47;color:#fff}.num{text-align:right}' +
-      '.cards{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0}' +
+      '.cards{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;page-break-inside:avoid}' +
       '.c{border:1px solid #ccc;border-radius:8px;padding:8px 12px;min-width:130px}.c span{color:#666;font-size:10px}.c b{display:block;font-size:15px}' +
-      '@media print{.noprint{display:none}}</style></head><body>' + bodyHTML +
+      '.pagebreak{page-break-before:always}' +
+      '@media print{.noprint{display:none}.capa{page-break-after:always;border-bottom:0}}' +
+      '</style></head><body>' + bodyHTML +
       '<div class="noprint" style="margin-top:22px"><button onclick="window.print()">Imprimir / Salvar como PDF</button></div>' +
       '<scr' + 'ipt>setTimeout(function(){window.print()},500)</scr' + 'ipt></body></html>'
     );
