@@ -427,27 +427,72 @@
     return b;
   }
 
+  /* Criação de lead: só considera o lead criado depois da confirmação real do
+     Supabase (Store.insertAndWait). Enquanto não confirma, o modal fica aberto,
+     com os dados preenchidos, e o botão mostra "Salvando...". Em erro, o modal
+     permanece aberto com os dados intactos e o mesmo ID é reaproveitado numa
+     nova tentativa (evita lead duplicado). */
   function novoLeadForm(after) {
     const b = leadFormBody(null);
-    C.modal('+ Novo lead', b, {
+    let leadId = null;      // mesmo ID reaproveitado entre tentativas
+    let salvando = false;   // trava contra duplo clique
+
+    function erroBox() {
+      let box = b.querySelector('.novo-lead-erro');
+      if (!box) { box = U.el('<div class="login-err novo-lead-erro" style="margin-top:8px"></div>'); b.appendChild(box); }
+      return box;
+    }
+
+    const m = C.modal('+ Novo lead', b, {
       saveLabel: 'Criar lead', onSave: function () {
+        if (salvando) return false;            // ignora cliques extras enquanto já está salvando
         const nome = fval(b, 'nome');
         if (!nome) { alert('Informe ao menos o nome do lead.'); return false; }
+
         const origem = fval(b, 'origem');
         const indicadorId = origem === 'Indicação' ? (fval(b, 'indicador') || null) : null;
         const consId = Auth.isConsultor() ? Auth.currentId() : (fval(b, 'cons') || null);
-        const lead = Store.insert('leads', comOwner({
+        if (!leadId) leadId = U.uid();
+        const leadObj = comOwner({
+          id: leadId,
           nome: nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'), email: fval(b, 'email'),
           cidade: fval(b, 'cidade'), origem: origem, indicadorId: indicadorId, consultorId: consId,
           obs: fval(b, 'obs'), etapa: 'novo', proximoContato: null, valorCredito: null,
           qualificacao: fval(b, 'qualificacao') || null,
           reuniao: null, proposta: null, motivoPerda: null, vendaId: null, atualizadoEm: U.nowISO()
-        }, ownerNovoLead(consId)));
-        Store.logHist(lead.id, 'cadastro',
-          'Lead cadastrado. Origem: ' + (origem || '—') + (indicadorId ? '. Indicado por: ' + C.nomeIndicador(indicadorId) : ''),
-          Auth.currentId());
-        C.toast('Lead criado.');
-        if (after) after(lead);
+        }, ownerNovoLead(consId));
+
+        const saveBtn = m.wrap.querySelector('.modal-foot .btn.primary');
+        const err = erroBox();
+        err.textContent = '';
+        salvando = true;
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Salvando...'; }
+
+        let promise;
+        try { promise = Store.insertAndWait('leads', leadObj); }
+        catch (e) {
+          salvando = false;
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Criar lead'; }
+          err.textContent = (e && e.message) || 'Não foi possível salvar o lead. Tente novamente.';
+          return false;
+        }
+
+        promise.then(function (lead) {
+          salvando = false;
+          Store.logHist(lead.id, 'cadastro',
+            'Lead cadastrado. Origem: ' + (lead.origem || '—') + (lead.indicadorId ? '. Indicado por: ' + C.nomeIndicador(lead.indicadorId) : ''),
+            Auth.currentId());
+          C.toast('Lead criado com sucesso.');
+          m.close();
+          if (after) after(lead);
+        }, function (e) {
+          salvando = false;
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Criar lead'; }
+          err.textContent = 'Não foi possível salvar o lead: ' + ((e && e.message) || 'erro desconhecido') +
+            '. Os dados preenchidos foram mantidos; você pode tentar novamente.';
+        });
+
+        return false;   // nunca fecha automaticamente; o fechamento é manual, só após a confirmação
       }
     });
   }

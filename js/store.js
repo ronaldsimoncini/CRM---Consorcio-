@@ -339,6 +339,47 @@ window.Store = (function () {
     const c = sbClient(); if (!c) return;
     enqueue(function () { return c.from(k).upsert(row).then(serverError); });
   }
+
+  /* Variante "trackeada" de enqueue(): roda na MESMA fila serial (_queue),
+     então nunca entra fora de ordem com outras gravações pendentes da mesma
+     tabela — mas devolve ao chamador a Promise da PRÓPRIA tarefa, que
+     resolve/rejeita com o resultado real dela. A corrente principal (_queue)
+     continua absorvendo o erro internamente (como enqueue() já fazia), para
+     as próximas gravações da fila não travarem; só quem pediu a tarefa
+     trackeada fica sabendo se ela deu certo ou não. Usada só por
+     insertAndWait() — enqueue()/pushUpsert()/pushDelete() não mudam. */
+  function enqueueTracked(taskFn) {
+    const result = _queue.then(function () { return taskFn(); });
+    _queue = result.catch(function () { /* a fila segue adiante; o erro já vai para `result`, de quem chamou */ });
+    return result;
+  }
+
+  /* Igual a insert() na forma (mesmo id/criadoEm, mesma conversão objToRow,
+     mesma fila), mas devolve uma Promise que só RESOLVE depois da confirmação
+     real do Supabase — e só então o objeto entra no cache. Em caso de erro,
+     a Promise rejeita e NADA é adicionado ao cache (nenhuma impressão falsa
+     de "salvo"). Não cria uma segunda fila: usa enqueueTracked() sobre a
+     MESMA _queue de insert/update/remove. Em modo local não há confirmação
+     remota de verdade — mantém o comportamento síncrono de insert() hoje. */
+  function insertAndWait(k, obj) {
+    assertWritable();
+    obj.id = obj.id || U.uid();
+    obj.criadoEm = obj.criadoEm || U.nowISO();
+
+    if (_mode !== 'cloud' || COLLECTIONS.indexOf(k) < 0) {
+      return Promise.resolve(insert(k, obj));
+    }
+    const c = sbClient();
+    if (!c) return Promise.resolve(insert(k, obj));
+
+    const row = objToRow(obj, k);
+    return enqueueTracked(function () { return c.from(k).upsert(row).then(serverError); })
+      .then(function () {
+        data[k].push(obj);
+        flush();
+        return obj;
+      });
+  }
   function pushDelete(k, id) {
     if (_mode !== 'cloud') return;
     const c = sbClient(); if (!c) return;
@@ -699,7 +740,7 @@ window.Store = (function () {
     renomearEtapaCustom: renomearEtapaCustom, excluirEtapaCustom: excluirEtapaCustom,
     isEtapaCustom: isEtapaCustom, etapasGenericas: etapasGenericas,
     qualificacoes: qualificacoes, qualificacaoLabel: qualificacaoLabel, qualificacaoInfo: qualificacaoInfo, constants: constants,
-    insert: insert, update: update, remove: remove, setConfig: setConfig,
+    insert: insert, update: update, remove: remove, setConfig: setConfig, insertAndWait: insertAndWait,
     logHist: logHist, historyOf: historyOf, subscribe: subscribe, batch: batch,
     resetAll: resetAll, loadDemo: loadDemo, _data: function () { return data; },
     /* migração Supabase */
