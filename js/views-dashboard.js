@@ -1,16 +1,28 @@
 /* Dashboard — visão operacional de leads e vendas (SEM meta) */
 (function () {
-  function bucketVendas(vendas, modo) {
+  /* Agrupa, por dia/semana/mês, os eventos de HISTÓRICO que marcam a entrada
+     de um lead na etapa boleto_e_assinatura. A data do evento é historico.data
+     (o momento real da troca de etapa) — NÃO leads.criadoEm, NÃO vendas. Um
+     lead que depois saiu da etapa continua contando na data em que entrou.
+     `leadsPorId` já reflete o escopo/filtros de consultor e origem aplicados
+     em draw() — histórico cujo lead não passa nesses filtros (ou não existe
+     mais) fica de fora, com segurança. */
+  function bucketEntradasBoleto(historico, leadsPorId, r, modo) {
+    const sufixo = 'para ' + Store.etapaLabel('boleto_e_assinatura');
     const map = {};
-    vendas.forEach(function (v) {
-      const d = U.dateFromISO(v.dataVenda);
+    historico.forEach(function (h) {
+      if (h.tipo !== 'mudanca_etapa') return;
+      if (typeof h.texto !== 'string' || !h.texto.endsWith(sufixo)) return;
+      if (!h.data || !U.inRange(h.data, r)) return;
+      if (!leadsPorId[h.leadId]) return;
+      const d = U.dateFromISO(h.data);
       if (!d) return;
       let key, label;
-      if (modo === 'mes') { key = v.dataVenda.slice(0, 7); label = d.toLocaleDateString('pt-BR', { month: 'short' }); }
+      if (modo === 'mes') { key = String(h.data).slice(0, 7); label = d.toLocaleDateString('pt-BR', { month: 'short' }); }
       else if (modo === 'semana') { const s = U.startOfWeek(d); key = U.iso(s); label = U.fmtDate(key).slice(0, 5); }
-      else { key = v.dataVenda; label = U.fmtDate(v.dataVenda).slice(0, 5); }
+      else { key = String(h.data).slice(0, 10); label = U.fmtDate(h.data).slice(0, 5); }
       if (!map[key]) map[key] = { key: key, label: label, valor: 0, qtd: 0 };
-      map[key].valor += Number(v.valorCredito) || 0;
+      map[key].valor += 1;
       map[key].qtd += 1;
     });
     return Object.keys(map).sort().map(function (k) { return map[k]; }).slice(-14);
@@ -55,6 +67,8 @@
       if (state.adm) vendas = vendas.filter(f('administradora', state.adm));
       if (state.origem) { leads = leads.filter(f('origem', state.origem)); vendas = vendas.filter(f('origem', state.origem)); }
 
+      const leadsPorId = {};
+      leads.forEach(function (l) { leadsPorId[l.id] = l; });
       const leadsP = leads.filter(function (l) { return U.inRange((l.criadoEm || '').slice(0, 10), r); });
       const vendasP = vendas.filter(function (v) { return U.inRange(v.dataVenda, r); });
       const propsP = props.filter(function (p) { return U.inRange((p.data || p.criadoEm || '').slice(0, 10), r); });
@@ -82,12 +96,12 @@
           return '<div class="fm-item"><div class="fm-n">' + n + '</div><div class="fm-l">' + e.label + '</div></div>';
         }).join('') + '</div></div>';
 
-      /* gráfico de vendas */
-      html += '<div class="card"><div class="card-title-row"><h3 class="card-title">Vendas no período</h3>' +
+      /* gráfico de entradas em Boleto e Assinatura */
+      html += '<div class="card"><div class="card-title-row"><h3 class="card-title">Entradas em Boleto e Assinatura</h3>' +
         '<div class="seg"><button data-g="dia" class="' + (state.grafico === 'dia' ? 'on' : '') + '">Dia</button>' +
         '<button data-g="semana" class="' + (state.grafico === 'semana' ? 'on' : '') + '">Semana</button>' +
         '<button data-g="mes" class="' + (state.grafico === 'mes' ? 'on' : '') + '">Mês</button></div></div>' +
-        C.barChart(bucketVendas(vendasP, state.grafico)) + '</div>';
+        C.barChart(bucketEntradasBoleto(Store.all('historico'), leadsPorId, r, state.grafico)) + '</div>';
 
       /* origem dos leads + desempenho consultores lado a lado */
       const origemAgg = {};
