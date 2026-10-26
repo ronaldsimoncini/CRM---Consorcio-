@@ -198,6 +198,16 @@ window.Auth = (function () {
   function canSeeAll() { return isAdmin() || isGestor(); }
   function canEdit() { return isAdmin() || isConsultor(); } /* gestor é somente leitura */
 
+  /* Permissões granulares (usuarios.data.perms: array de strings, ex.:
+     ["vendas_indicacao"]). O admin sempre passa; os demais dependem da lista.
+     `perms` é lido do cadastro carregado do Supabase (currentUser), nunca do
+     frontend — a barreira real fica na RLS/RPC do banco. */
+  function can(perm) {
+    if (isAdmin()) return true;
+    const u = user();
+    return !!(u && Array.isArray(u.perms) && u.perms.indexOf(perm) >= 0);
+  }
+
   /* Um registro pertence ao usuário logado?
      Critério principal: owner_uid === auth.uid() (o mesmo que o RLS usará).
      Fallback: registros SEM owner_uid (legado / os 25 leads antigos) usam o
@@ -218,15 +228,16 @@ window.Auth = (function () {
 
   function menu() {
     const base = ['dashboard', 'leads', 'funil', 'reunioes', 'calendario', 'simulacoes', 'propostas', 'vendas', 'metas'];
-    if (isConsultor()) return base;
-    if (isGestor()) return base.concat(['consultores', 'relatorios']);
-    return base.concat(['consultores', 'relatorios', 'config']); /* admin */
+    const extra = can('vendas_indicacao') ? ['indicacoes'] : [];
+    if (isConsultor()) return base.concat(extra);
+    if (isGestor()) return base.concat(['consultores', 'relatorios'], extra);
+    return base.concat(['consultores', 'relatorios', 'config'], extra); /* admin */
   }
 
   return {
     user: user, login: login, logout: logout, nivel: nivel,
     isAdmin: isAdmin, isGestor: isGestor, isConsultor: isConsultor,
-    canSeeAll: canSeeAll, canEdit: canEdit, scope: scope, owns: owns, menu: menu,
+    canSeeAll: canSeeAll, canEdit: canEdit, can: can, scope: scope, owns: owns, menu: menu,
     currentId: currentId, adminApi: adminApi, googleCalendarConnect: googleCalendarConnect,
     uid: function () { return currentUid; },   /* auth.uid() da sessão atual (para owner_uid) */
     /* utilitários para a próxima etapa (app.js / store.js) */

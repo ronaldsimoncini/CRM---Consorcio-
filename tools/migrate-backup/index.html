@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migração de backup → Supabase (CRM Consórcio)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #f4f5f7; color: #1b2430; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 24px 18px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h3 { margin: 18px 0 8px; }
+  h4 { margin: 16px 0 6px; }
+  .card { background: #fff; border: 1px solid #dfe3e8; border-radius: 10px; padding: 16px 18px; margin: 14px 0; }
+  .step { font-size: 12px; letter-spacing: .06em; color: #6a7480; text-transform: uppercase; margin-bottom: 8px; }
+  label { display: block; font-size: 13px; margin: 8px 0 3px; color: #45505d; }
+  input[type=text], input[type=email], input[type=password] { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cdd3da; border-radius: 6px; font-size: 14px; }
+  button { font-size: 14px; padding: 9px 16px; border-radius: 7px; border: 1px solid #1E2D47; background: #1E2D47; color: #fff; cursor: pointer; margin: 10px 8px 0 0; }
+  button.ghost { background: #fff; color: #1E2D47; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 240px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+  th, td { border: 1px solid #dfe3e8; padding: 6px 9px; text-align: left; }
+  th { background: #eef1f4; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.bad, .bad { color: #b3261e; font-weight: 600; }
+  .muted { color: #6a7480; font-size: 12px; }
+  .ok { color: #1a7f37; font-weight: 600; }
+  .warn { color: #9a6700; font-weight: 600; }
+  .banner { padding: 10px 14px; border-radius: 8px; background: #eef1f4; border: 1px solid #dfe3e8; font-size: 13px; margin: 10px 0; }
+  .banner.ok { background: #e8f5ec; border-color: #b7e0c3; }
+  .banner.warn { background: #fdf3e2; border-color: #f0d9a8; }
+  ul.detalhes { font-size: 12px; line-height: 1.5; padding-left: 18px; }
+  #log { background: #0f1720; color: #d6e2ef; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; padding: 12px; border-radius: 8px; white-space: pre-wrap; max-height: 320px; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Migração de backup → Supabase</h1>
+  <p class="muted">CRM Consórcio — LFT · ferramenta local, roda no navegador · <b>não faz nenhuma escrita sem confirmação explícita</b>.</p>
+
+  <div id="banner" class="banner">Carregando…</div>
+
+  <div class="card">
+    <div class="step">1 · Conexão com o Supabase</div>
+    <div class="row">
+      <div>
+        <label>Supabase URL</label>
+        <input id="supaUrl" type="text" placeholder="https://xxxx.supabase.co">
+      </div>
+      <div>
+        <label>Anon key (pública)</label>
+        <input id="supaKey" type="text" placeholder="sb_publishable_...">
+      </div>
+    </div>
+    <button class="ghost" id="btnLoadConfig">Tentar ler do config.js</button>
+    <div class="row" style="margin-top:6px">
+      <div>
+        <label>E-mail (admin do CRM)</label>
+        <input id="email" type="email" autocomplete="off" placeholder="relacionamento@lftgestaoderisco.com.br">
+      </div>
+      <div>
+        <label>Senha (usada só para autenticar; não é salva)</label>
+        <input id="senha" type="password" autocomplete="off">
+      </div>
+    </div>
+    <p class="muted">O login é necessário porque o RLS do banco só libera leitura/gravação para um usuário autenticado da agência. A senha não é armazenada nem enviada a lugar nenhum além do Supabase Auth.</p>
+    <button id="btnConnect">Conectar e ler o Supabase</button>
+    <span id="connState" class="muted">não conectado</span>
+  </div>
+
+  <div class="card">
+    <div class="step">2 · Arquivo de backup</div>
+    <input id="file" type="file" accept="application/json,.json">
+    <div id="fileState" class="muted">nenhum arquivo selecionado</div>
+  </div>
+
+  <div class="card">
+    <div class="step">3 · Análise (somente leitura)</div>
+    <p class="muted">Compara os IDs do backup com o que já existe no Supabase e mostra o que seria migrado, o que já existe e o que tem conflito. <b>Não escreve nada.</b></p>
+    <button id="btnAnalyze" disabled>Analisar</button>
+    <div id="report"></div>
+  </div>
+
+  <div class="card">
+    <div class="step">4 · Migração</div>
+    <p class="muted">Insere <b>apenas</b> os registros novos (IDs preservados). Nunca apaga, nunca atualiza, nunca sobrescreve. Não toca em <code>config</code>, <code>consultores</code> nem no Supabase Auth. Exige digitar <b>MIGRAR</b> para confirmar.</p>
+    <button id="btnMigrate" disabled>Executar migração</button>
+    <button class="ghost" id="btnDownloadLog" disabled>Baixar log / relatório</button>
+  </div>
+
+  <div class="card">
+    <div class="step">Log</div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="migrate.js"></script>
+</body>
+</html>

@@ -7,9 +7,6 @@
   function fval(b, n) { const e = b.querySelector('[name="' + n + '"]'); return e ? String(e.value).trim() : ''; }
   function fnum(b, n) { return U.parseNumber(fval(b, n)); }
   function admOpts(sel) { return C.opts(Store.config().administradoras, sel, { blank: '—' }); }
-  function prodOpts(sel) {
-    return C.opts(Store.all('produtos').filter(function (p) { return p.ativo; }).map(function (p) { return { value: p.id, label: p.nome }; }), sel, { blank: '—' });
-  }
 
   function statusLead(l) {
     if (l.etapa === 'nao_fez') return { label: 'Não realizado', cls: 'st-bad' };
@@ -70,13 +67,11 @@
     if (nova === 'proposta_realizada') return H.propostaForm(lead);
     /* REGRA OFICIAL: a venda só é registrada ao entrar em "boleto_e_assinatura".
        "fechamento" não é mais especial — é uma etapa comercial normal, sem
-       formulário, sem criar venda nem vendaId (cai no caminho genérico abaixo). */
-    if (nova === 'boleto_e_assinatura') {
-      /* já tem venda vinculada (ex.: voltou para Boleto depois de ter saído) ->
-         não abre o formulário de novo, não duplica a venda */
-      if (lead.vendaId) { transitionEtapa(lead, nova); return; }
-      return H.fecharVendaForm(lead);
-    }
+       formulário, sem criar venda nem vendaId (cai no caminho genérico abaixo).
+       De qualquer etapa de origem, com ou sem proposta_realizada antes, abre o
+       modal "Dados do Consórcio" — inclusive se já houver venda vinculada
+       (reabertura para confirmar/editar os valores; ver H.boletoForm). */
+    if (nova === 'boleto_e_assinatura') return H.boletoForm(lead);
     if (nova === 'nao_fez') return H.motivoForm(lead);
     if (nova === 'retomar_contato') return H.retomarContatoForm(lead);
     transitionEtapa(lead, nova);
@@ -282,53 +277,129 @@
     });
   };
 
-  /* Abre o formulário de venda — hoje chamado só ao entrar em
-     "boleto_e_assinatura" (regra oficial: venda = lead em Boleto e Assinatura).
-     Cancelar o modal (ou fechar sem salvar) não executa onSave: nenhuma venda
-     é criada, nenhum vendaId é gravado, e o lead permanece na etapa em que
-     estava — nada fica parcialmente salvo. */
-  H.fecharVendaForm = function (lead, after) {
-    const p = lead.proposta || {};
+  /* Modal "Dados do Consórcio" — abre SEMPRE que o lead for ficar com etapa
+     atual = "boleto_e_assinatura" (regra oficial de venda), de qualquer
+     etapa de origem, com ou sem proposta_realizada antes. Pede só o que é
+     necessário nesta etapa: valor do crédito, parcela cheia, meia parcela
+     (máscara BR só visual — o valor gravado é sempre numérico, lido via
+     U.moneyInputValue). Cancelar não executa onSave: nada é criado/alterado,
+     o lead permanece na etapa em que estava.
+
+     Reabertura (lead.vendaId já existe): carrega os valores atuais para
+     edição; ao salvar, ATUALIZA a venda e o lead existentes — nunca cria uma
+     segunda venda, nunca duplica histórico/meta/comissão.
+
+     Persistência (sem "sumiço" de cliente): etapa, vendaId, valorCredito e
+     lead.boleto só são considerados salvos depois da confirmação real do
+     Supabase (Store.insertAndWait/updateAndWait) — nunca de forma otimista.
+     Em erro, o modal permanece aberto com os dados preenchidos, mostra o
+     erro e permite tentar novamente. Idempotência: o id da venda é decidido
+     UMA VEZ (reaproveita lead.vendaId se já existir; senão gera um id novo e
+     mantém esse MESMO id fixo entre tentativas) — como toda gravação usa
+     upsert, uma nova tentativa depois de uma falha nunca cria uma segunda
+     venda, mesmo que a primeira tentativa já tenha sido salva no servidor
+     sem o cliente/local ter recebido a confirmação. */
+  H.boletoForm = function (lead, after) {
+    const bAnterior = lead.boleto || {};
+    const credInicial = Number(lead.valorCredito) || 0;
+    const parcInicial = Number(bAnterior.parcelaCheia) || 0;
+    const meiaInicial = Number(bAnterior.meiaParcela) || 0;
+    const vendaIdFixo = lead.vendaId || U.uid();   // fixo entre tentativas desta abertura
+
     const b = buildForm(
-      C.field('Cliente', '<input name="cliente" value="' + U.esc(lead.nome) + '">', true) +
-      C.field('Telefone', '<input name="tel" value="' + U.esc(lead.telefone || '') + '">') +
-      C.field('WhatsApp', '<input name="wpp" value="' + U.esc(lead.whatsapp || lead.telefone || '') + '">') +
-      C.field('Consultor', '<select name="cons">' + C.opts(C.usuariosConsultores(), lead.consultorId) + '</select>') +
-      C.field('Administradora', '<select name="adm">' + admOpts(p.administradora || '') + '</select>') +
-      C.field('Produto', '<select name="prod">' + prodOpts('') + '</select>') +
-      C.field('Valor do crédito (R$)', '<input name="cred" inputmode="decimal" value="' + (lead.valorCredito || p.valorCredito || '') + '">') +
-      C.field('Valor da parcela (R$)', '<input name="parc" inputmode="decimal" value="' + (p.valorParcela || '') + '">') +
-      C.field('Número da cota', '<input name="cota">') +
-      C.field('Data da venda', '<input type="date" name="data" value="' + U.todayISO() + '">') +
-      C.field('Comissão (R$)', '<input name="com" inputmode="decimal">') +
-      C.field('Observações', '<textarea name="obs"></textarea>', true)
+      C.field('Valor do crédito', '<input name="cred" autocomplete="off">') +
+      C.field('Parcela cheia', '<input name="parc" autocomplete="off">') +
+      C.field('Meia parcela', '<input name="meia" autocomplete="off">')
     );
-    C.modal('Fechar venda', b, {
-      saveLabel: 'Registrar venda', onSave: function () {
-        const cred = fnum(b, 'cred');
-        if (!cred) { alert('Informe o valor do crédito.'); return false; }
-        /* trava contra duplicidade (defesa redundante com a de moveLead()): se o
-           lead já tem uma venda vinculada, só move para Boleto e Assinatura —
-           nunca cria uma segunda venda */
-        if (lead.vendaId) { transitionEtapa(lead, 'boleto_e_assinatura'); if (after) after(); return; }
-        Store.batch(function () {
+    const inCred = b.querySelector('[name="cred"]');
+    const inParc = b.querySelector('[name="parc"]');
+    const inMeia = b.querySelector('[name="meia"]');
+    U.maskMoneyInput(inCred, credInicial);
+    U.maskMoneyInput(inParc, parcInicial);
+    U.maskMoneyInput(inMeia, meiaInicial);
+
+    const err = U.el('<div class="login-err" style="margin-top:8px"></div>');
+    b.appendChild(err);
+    let salvando = false;
+
+    const m = C.modal('Dados do Consórcio', b, {
+      saveLabel: 'Confirmar', cancelLabel: 'Cancelar', onSave: function () {
+        if (salvando) return false;
+        err.textContent = '';
+        const cred = U.moneyInputValue(inCred);
+        if (!cred) { err.textContent = 'Informe o valor do crédito.'; return false; }
+        const parc = U.moneyInputValue(inParc);
+        const meia = U.moneyInputValue(inMeia);
+
+        const saveBtn = m.wrap.querySelector('.modal-foot .btn.primary');
+        salvando = true;
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Salvando...'; }
+
+        function falhou(e) {
+          salvando = false;
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Confirmar'; }
+          err.textContent = 'Não foi possível salvar: ' + ((e && e.message) || 'erro desconhecido') +
+            '. Os dados preenchidos foram mantidos; você pode tentar novamente.';
+        }
+
+        /* estado real atual (não o snapshot de quando o modal abriu) — evita
+           criar uma venda duplicada se uma tentativa anterior já tiver sido
+           confirmada no servidor sem o usuário perceber */
+        const freshLead = Store.get('leads', lead.id) || lead;
+        const etapaAntes = freshLead.etapa;
+        /* Checa tanto a venda já vinculada ao lead quanto o id fixo desta
+           abertura do modal: numa nova tentativa, a venda pode já ter sido
+           confirmada no servidor (e já estar no cache) numa tentativa
+           anterior cujo passo seguinte (atualizar o lead) falhou — nesse
+           caso é preciso REUTILIZAR essa venda, nunca criar outra. */
+        const vendaExistente = (freshLead.vendaId && Store.get('vendas', freshLead.vendaId)) ||
+          Store.get('vendas', vendaIdFixo) || null;
+
+        let passoVenda;
+        if (vendaExistente) {
+          passoVenda = Store.updateAndWait('vendas', vendaExistente.id, { valorCredito: cred });
+        } else {
           const v = {
-            leadId: lead.id, cliente: fval(b, 'cliente') || lead.nome, telefone: fval(b, 'tel'), whatsapp: fval(b, 'wpp'),
-            consultorId: fval(b, 'cons') || lead.consultorId, administradora: fval(b, 'adm'), produtoId: fval(b, 'prod') || null,
-            valorCredito: cred, valorParcela: fnum(b, 'parc'), numeroCota: fval(b, 'cota'),
-            dataVenda: fval(b, 'data'), origem: lead.origem, indicadorId: lead.indicadorId || null,
-            comissao: fnum(b, 'com'), obs: fval(b, 'obs'), status: 'venda_realizada'
+            id: vendaIdFixo,
+            leadId: lead.id, cliente: lead.nome, telefone: lead.telefone || '', whatsapp: lead.whatsapp || lead.telefone || '',
+            consultorId: lead.consultorId, administradora: (lead.proposta && lead.proposta.administradora) || '',
+            produtoId: null, valorCredito: cred, valorParcela: parc, numeroCota: '',
+            dataVenda: U.todayISO(), origem: lead.origem, indicadorId: lead.indicadorId || null,
+            comissao: 0, obs: '', status: 'venda_realizada'
           };
           v.metaId = C.metaParaVenda(v);
-          comOwner(v, ownerDoLead(lead, v.consultorId));
-          const venda = Store.insert('vendas', v);
-          transitionEtapa(lead, 'boleto_e_assinatura');
-          Store.update('leads', lead.id, { vendaId: venda.id });
-          Store.logHist(lead.id, 'venda', 'Venda registrada: ' + U.brl(cred) +
-            (v.metaId ? ' — conta na meta "' + C.nomeMeta(v.metaId) + '"' : ''), Auth.currentId());
-        });
-        C.toast('Venda registrada! Dashboard, relatórios e metas atualizados.');
-        if (after) after();
+          passoVenda = Store.insertAndWait('vendas', comOwner(v, ownerDoLead(lead, lead.consultorId)));
+        }
+
+        passoVenda.then(function (venda) {
+          return Store.updateAndWait('leads', lead.id, {
+            etapa: 'boleto_e_assinatura', atualizadoEm: U.nowISO(),
+            vendaId: venda.id, valorCredito: cred,
+            boleto: { parcelaCheia: parc, meiaParcela: meia }
+          }).then(function () {
+            salvando = false;
+            const criouAgora = !vendaExistente;
+            const entrouAgora = etapaAntes !== 'boleto_e_assinatura';
+            const mudouValores = criouAgora || Number(vendaExistente.valorCredito) !== cred ||
+              Number(bAnterior.parcelaCheia) !== parc || Number(bAnterior.meiaParcela) !== meia;
+            if (entrouAgora) {
+              Store.logHist(lead.id, 'mudanca_etapa',
+                'Movido de ' + Store.etapaLabel(etapaAntes) + ' para ' + Store.etapaLabel('boleto_e_assinatura'), Auth.currentId());
+            }
+            if (criouAgora) {
+              Store.logHist(lead.id, 'venda', 'Venda registrada: ' + U.brl(cred) +
+                (venda.metaId ? ' — conta na meta "' + C.nomeMeta(venda.metaId) + '"' : ''), Auth.currentId());
+            } else if (!entrouAgora && mudouValores) {
+              Store.logHist(lead.id, 'venda', 'Dados do consórcio atualizados: crédito ' + U.brl(cred) +
+                ', parcela cheia ' + U.brl(parc) + ', meia parcela ' + U.brl(meia), Auth.currentId());
+            }
+            C.toast('Dados do consórcio salvos.');
+            m.close();
+            if (after) after();
+          }, falhou);
+        }, falhou);
+
+        return false;   // nunca fecha automaticamente — só depois da confirmação
       }
     });
   };
@@ -564,7 +635,8 @@
     mk('🔁 Retomar contato', function () { H.retomarContatoForm(lead, reopen); });
     mk('📄 Criar proposta', function () { H.propostaForm(lead, reopen); });
     mk('↔️ Mover etapa', function () { H.moverEtapaForm(lead, reopen); });
-    if (lead.etapa !== 'boleto_e_assinatura') mk('✅ Fechar venda', function () { H.fecharVendaForm(lead, reopen); });
+    if (lead.etapa !== 'boleto_e_assinatura') mk('✅ Ir para Boleto e Assinatura', function () { H.boletoForm(lead, reopen); });
+    if (lead.etapa === 'boleto_e_assinatura') mk('✏️ Editar dados do consórcio', function () { H.boletoForm(lead, reopen); });
     if (lead.etapa !== 'nao_fez') mk('🚫 Não realizado', function () { H.motivoForm(lead, reopen); });
 
     const del = U.el('<button class="qa" style="color:#b3261e">🗑️ Excluir lead</button>');
@@ -1207,7 +1279,7 @@
     novaEtapaForm: novaEtapaForm,
     simForm: simForm,
     propostaForm: function (lead, after) { return H.propostaForm(lead, after); },
-    fecharVenda: function (lead, after) { return H.fecharVendaForm(lead, after); },
+    fecharVenda: function (lead, after) { return H.boletoForm(lead, after); },
     statusLead: statusLead
   };
 })();

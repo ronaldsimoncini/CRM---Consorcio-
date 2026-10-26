@@ -145,7 +145,14 @@
     const indRow = U.el('<div class="field full" style="display:none"><span>Pessoa que indicou</span>' +
       '<select name="ind">' + C.opts(Store.all('indicadores').map(function (i) { return { value: i.id, label: i.nome }; }), venda.indicadorId || '', { blank: '—' }) + '</select></div>');
     b.appendChild(indRow);
-    function syncInd() { indRow.style.display = b.querySelector('[name="origem"]').value === 'Indicação' ? 'flex' : 'none'; }
+    const indRowU = U.el('<div class="field full" style="display:none"><span>Indicado por (funcionário LFT)</span>' +
+      '<select name="indUsuario">' + C.opts(C.usuariosConsultores(), venda.indicadorUsuarioId || '', { blank: '—' }) + '</select></div>');
+    b.appendChild(indRowU);
+    function syncInd() {
+      const on = b.querySelector('[name="origem"]').value === 'Indicação';
+      indRow.style.display = on ? 'flex' : 'none';
+      indRowU.style.display = on ? 'flex' : 'none';
+    }
     b.querySelector('[name="origem"]').addEventListener('change', syncInd); syncInd();
 
     C.modal(isNew ? 'Nova venda' : 'Editar venda', b, {
@@ -159,20 +166,24 @@
           valorCredito: cred, valorParcela: fnum(b, 'parc'), numeroCota: fval(b, 'cota'),
           dataVenda: fval(b, 'data'), origem: fval(b, 'origem'),
           indicadorId: fval(b, 'origem') === 'Indicação' ? (fval(b, 'ind') || null) : null,
+          indicadorUsuarioId: fval(b, 'origem') === 'Indicação' ? (fval(b, 'indUsuario') || null) : null,
           comissao: fnum(b, 'com'), obs: fval(b, 'obs'), status: 'venda_realizada'
         };
         rec.metaId = C.metaParaVenda(Object.assign({}, venda, rec));
+        let alvo = null;
         if (isNew) {
           /* Fase 2: dono da venda = consultor logado, ou o consultor escolhido pelo admin/gestor */
           const ou = Auth.isConsultor()
             ? (Auth.uid && Auth.uid())
             : (rec.consultorId && Store.ownerUidFor ? Store.ownerUidFor(rec.consultorId) : null);
           if (ou) rec.owner_uid = ou;
-          Store.insert('vendas', rec);
+          alvo = Store.insert('vendas', rec);
         } else {
-          Store.update('vendas', venda.id, rec);
+          alvo = Store.update('vendas', venda.id, rec) || Object.assign({ id: venda.id }, rec);
         }
         C.toast('Venda salva. Dashboard, relatórios e metas atualizados.');
+        /* comissão de indicação: sincroniza via RPC (não bloqueia nem altera a venda) */
+        if (window.Views && Views._indicacao && alvo && alvo.id) Views._indicacao.sync(alvo);
         if (after) after();
       }
     });
@@ -244,6 +255,9 @@
               if (v.leadId) { const l = Store.get('leads', v.leadId); if (l && l.vendaId === v.id) Store.update('leads', l.id, { vendaId: null }); }
               Store.remove('vendas', v.id);
             });
+            /* comissão de indicação: a venda deixou de existir -> a RPC remove a
+               comissão pendente e mantém a paga (registro histórico). */
+            if (window.Views && Views._indicacao) Views._indicacao.sync({ id: v.id });
           });
         };
       });

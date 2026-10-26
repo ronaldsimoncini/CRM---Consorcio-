@@ -37,6 +37,29 @@ window.U = (function () {
     return isNaN(n) ? 0 : n;
   }
 
+  /* Máscara monetária BR "ao digitar" (ex.: "R$ 4.000.000,00"). A fonte da
+     verdade é SEMPRE input.dataset.cents (inteiro de centavos) — a máscara é
+     só visual, nunca é reconstruída a partir do texto formatado (evita
+     ambiguidade de ponto/vírgula). Ler o valor numérico com moneyInputValue(). */
+  function maskMoneyInput(input, valorInicial) {
+    function aplicar(cents) {
+      cents = Math.max(0, Math.round(cents) || 0);
+      input.dataset.cents = String(cents);
+      input.value = (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    }
+    input.setAttribute('inputmode', 'numeric');
+    input.addEventListener('input', function () {
+      const digitos = onlyDigits(input.value);
+      aplicar(digitos ? parseInt(digitos, 10) : 0);
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+    input.addEventListener('focus', function () {
+      setTimeout(function () { input.setSelectionRange(input.value.length, input.value.length); }, 0);
+    });
+    aplicar(Math.round((Number(valorInicial) || 0) * 100));
+  }
+  function moneyInputValue(input) { return (Number(input.dataset.cents) || 0) / 100; }
+
   function onlyDigits(s) { return String(s || '').replace(/\D/g, ''); }
   function fmtPhone(s) {
     const d = onlyDigits(s);
@@ -152,6 +175,7 @@ window.U = (function () {
   return {
     DAY: DAY, uid: uid, nowISO: nowISO, todayISO: todayISO, iso: iso, dateFromISO: dateFromISO,
     fmtDate: fmtDate, fmtDateTime: fmtDateTime, brl: brl, brlShort: brlShort, parseNumber: parseNumber,
+    maskMoneyInput: maskMoneyInput, moneyInputValue: moneyInputValue,
     onlyDigits: onlyDigits, fmtPhone: fmtPhone, waLink: waLink, telLink: telLink,
     daysBetween: daysBetween, addDays: addDays, clamp: clamp, pct: pct, el: el, esc: esc,
     startOfWeek: startOfWeek, range: range, inRange: inRange,

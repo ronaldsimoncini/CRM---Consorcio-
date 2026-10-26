@@ -2,12 +2,12 @@
 (function () {
   const LABELS = {
     dashboard: 'Dashboard', leads: 'Leads', funil: 'Funil', reunioes: 'Reuniões', calendario: 'Calendário', simulacoes: 'Simulações',
-    propostas: 'Propostas', vendas: 'Vendas', metas: 'Metas',
+    propostas: 'Propostas', vendas: 'Vendas', metas: 'Metas', indicacoes: 'Vendas por Indicação',
     consultores: 'Consultores', relatorios: 'Relatórios', config: 'Configurações'
   };
   const ICONS = {
     dashboard: '📊', leads: '🧑', funil: '🗂️', reunioes: '📋', calendario: '📅', simulacoes: '🧮', propostas: '📄', vendas: '💰',
-    metas: '🎯', consultores: '👥', relatorios: '📈', config: '⚙️'
+    metas: '🎯', indicacoes: '🤝', consultores: '👥', relatorios: '📈', config: '⚙️'
   };
   let mounted = false;
 

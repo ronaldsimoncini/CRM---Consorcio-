@@ -380,6 +380,37 @@ window.Store = (function () {
         return obj;
       });
   }
+  /* Igual a update() na forma (mesmo merge de patch, mesma conversão objToRow),
+     mas devolve uma Promise que só RESOLVE depois da confirmação real do
+     Supabase — e só então o patch é refletido no cache. Em caso de erro, a
+     Promise rejeita e o cache NÃO é alterado (sem impressão falsa de "salvo",
+     sem o hydrate() de recuperação do enqueue() normal apagando uma mudança
+     que nunca chegou a ser confirmada). Não altera update()/insert()/hydrate()
+     existentes — é um caminho adicional, usado só onde a chamada precisa
+     aguardar a confirmação real (ver H.boletoForm em views-leads.js). Em modo
+     local não há confirmação remota de verdade — aplica o patch direto. */
+  function updateAndWait(k, id, patch) {
+    assertWritable();
+    const atual = data[k].find(function (x) { return x.id === id; });
+    if (!atual) return Promise.reject(new Error('Registro não encontrado para atualizar.'));
+    const next = Object.assign({}, atual, patch);
+
+    if (_mode !== 'cloud' || COLLECTIONS.indexOf(k) < 0) {
+      return Promise.resolve(update(k, id, patch));
+    }
+    const c = sbClient();
+    if (!c) return Promise.resolve(update(k, id, patch));
+
+    const row = objToRow(next, k);
+    if (!Object.prototype.hasOwnProperty.call(patch, 'owner_uid')) delete row.owner_uid;
+    return enqueueTracked(function () { return c.from(k).upsert(row).then(serverError); })
+      .then(function () {
+        const i = data[k].findIndex(function (x) { return x.id === id; });
+        if (i >= 0) data[k][i] = Object.assign({}, data[k][i], patch);
+        flush();
+        return i >= 0 ? data[k][i] : next;
+      });
+  }
   function pushDelete(k, id) {
     if (_mode !== 'cloud') return;
     const c = sbClient(); if (!c) return;
@@ -740,7 +771,7 @@ window.Store = (function () {
     renomearEtapaCustom: renomearEtapaCustom, excluirEtapaCustom: excluirEtapaCustom,
     isEtapaCustom: isEtapaCustom, etapasGenericas: etapasGenericas,
     qualificacoes: qualificacoes, qualificacaoLabel: qualificacaoLabel, qualificacaoInfo: qualificacaoInfo, constants: constants,
-    insert: insert, update: update, remove: remove, setConfig: setConfig, insertAndWait: insertAndWait,
+    insert: insert, update: update, remove: remove, setConfig: setConfig, insertAndWait: insertAndWait, updateAndWait: updateAndWait,
     logHist: logHist, historyOf: historyOf, subscribe: subscribe, batch: batch,
     resetAll: resetAll, loadDemo: loadDemo, _data: function () { return data; },
     /* migração Supabase */

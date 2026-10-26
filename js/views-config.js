@@ -56,7 +56,13 @@
       C.field('Telefone', '<input name="tel" value="' + U.esc(u.telefone || '') + '">') +
       C.field('Cargo', '<input name="cargo" value="' + U.esc(u.cargo || '') + '">') +
       C.field('Nível de acesso', '<select name="nivel">' + C.opts(NIVEIS, u.nivel) + '</select>') +
-      C.field('Status', '<select name="status">' + C.opts(STATUS, u.status) + '</select>')
+      C.field('Status', '<select name="status">' + C.opts(STATUS, u.status) + '</select>') +
+      /* permissões granulares: só na EDIÇÃO (na criação o usuário nasce sem
+         permissão e o admin a concede aqui depois). */
+      (isNew ? '' : C.field('Permissões',
+        '<label class="inline"><input type="checkbox" name="perm_vi"' +
+        (((u.perms || []).indexOf('vendas_indicacao') >= 0) ? ' checked' : '') +
+        '> Acesso a Vendas por Indicação</label>', true))
     );
     b.appendChild(err);
 
@@ -66,7 +72,7 @@
         'não fica guardada no banco.</div></div>'));
     } else {
       b.appendChild(U.el('<div class="field full"><span></span><div class="muted">' +
-        'Nome, telefone, cargo, nível e status podem ser editados aqui. A troca de e-mail ou senha de um usuário ' +
+        'Nome, telefone, cargo, nível, status e permissões podem ser editados aqui. A troca de e-mail ou senha de um usuário ' +
         'existente ainda não é feita pelo CRM.</div></div>'));
       if (!u.authUid) {
         const linkWrap = U.el('<div class="field full"><span>Vincular login existente</span>' +
@@ -103,9 +109,14 @@
             err.textContent = 'Você não pode remover o seu próprio acesso de administrador enquanto está logado.';
             return false;
           }
+          /* permissões: preserva outras que existam, alterna só 'vendas_indicacao' */
+          const permVi = b.querySelector('[name="perm_vi"]');
+          const permsBase = (Array.isArray(u.perms) ? u.perms : []).filter(function (p) { return p !== 'vendas_indicacao'; });
+          const perms = (permVi && permVi.checked) ? permsBase.concat(['vendas_indicacao']) : permsBase;
           Store.update('usuarios', u.id, {
             nome: nome, email: u.email,           // e-mail preservado (não editável nesta fase)
-            telefone: fval(b, 'tel'), cargo: fval(b, 'cargo'), nivel: nivel, status: status
+            telefone: fval(b, 'tel'), cargo: fval(b, 'cargo'), nivel: nivel, status: status,
+            perms: perms
           });
           C.toast('Usuário salvo.');
           return; // fecha o modal
