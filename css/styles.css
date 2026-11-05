@@ -109,6 +109,12 @@ a{color:var(--accent)}
 /* ---------- filtros ---------- */
 .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
 .filters select,.filters input{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:13px;max-width:190px}
+.filtro-data-cadastro{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.filtro-data-cadastro .fdc-chips{display:flex;gap:6px;flex-wrap:wrap}
+.filtro-data-cadastro .fdc-chip{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:#fff;font-size:12px;cursor:pointer;color:var(--text-soft)}
+.filtro-data-cadastro .fdc-chip.active{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.filtro-data-cadastro .fdc-data,.filtro-data-cadastro .fdc-periodo input{padding:6px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px}
+.filtro-data-cadastro .fdc-contador{font-size:13px;font-weight:600}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg button{background:#fff;border:0;padding:6px 12px;cursor:pointer;font-size:12px;color:var(--text-soft)}
 .seg button.on{background:var(--brand);color:#fff}

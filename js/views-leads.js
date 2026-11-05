@@ -1021,6 +1021,98 @@
     setTimeout(function () { document.addEventListener('click', fecharMenuEtapa, { once: true }); }, 0);
   }
 
+  /* ---------------- filtro "Data de cadastro" (lead.criadoEm) ----------------
+     Componente compartilhado entre a lista de Leads e o Funil (Kanban). É
+     SOMENTE um filtro de visualização: nunca lê/grava nada fora do cache já
+     carregado, nunca altera etapa, histórico, criadoEm ou qualquer outro dado
+     do lead. Usa sempre o calendário de Brasília (U.dataLocalBR), nunca
+     slice() de string UTC — ver nota na análise. Combina-se com os demais
+     filtros por lógica E (quem usa este componente decide onde encaixar
+     filtro.passa() no próprio filtro). */
+  function criarFiltroDataCadastro(onChange) {
+    const wrap = U.el(
+      '<div class="filtro-data-cadastro">' +
+      '<span class="fdc-label muted">📅 Data de cadastro</span>' +
+      '<div class="fdc-chips">' +
+      '<button type="button" class="fdc-chip" data-modo="todos">Todos</button>' +
+      '<button type="button" class="fdc-chip" data-modo="hoje">Hoje</button>' +
+      '<button type="button" class="fdc-chip" data-modo="ontem">Ontem</button>' +
+      '<button type="button" class="fdc-chip" data-modo="anteontem">Anteontem</button>' +
+      '<button type="button" class="fdc-chip" data-modo="data">Escolher data</button>' +
+      '<button type="button" class="fdc-chip" data-modo="periodo">Período personalizado</button>' +
+      '</div>' +
+      '<input type="date" class="fdc-data" style="display:none">' +
+      '<span class="fdc-periodo" style="display:none">' +
+      '<input type="date" class="fdc-de" title="Data inicial"> até ' +
+      '<input type="date" class="fdc-ate" title="Data final">' +
+      '</span>' +
+      '<span class="fdc-contador muted"></span>' +
+      '</div>'
+    );
+    const chips = wrap.querySelectorAll('.fdc-chip');
+    const inData = wrap.querySelector('.fdc-data');
+    const spanPeriodo = wrap.querySelector('.fdc-periodo');
+    const inDe = wrap.querySelector('.fdc-de');
+    const inAte = wrap.querySelector('.fdc-ate');
+    const contador = wrap.querySelector('.fdc-contador');
+    let modo = 'todos';
+
+    function sincronizarUI() {
+      chips.forEach(function (c) { c.classList.toggle('active', c.dataset.modo === modo); });
+      inData.style.display = modo === 'data' ? '' : 'none';
+      spanPeriodo.style.display = modo === 'periodo' ? '' : 'none';
+    }
+    chips.forEach(function (c) {
+      c.onclick = function () {
+        modo = c.dataset.modo;
+        if (modo === 'data' && !inData.value) inData.value = U.hojeLocalBR();
+        if (modo === 'periodo' && !inDe.value) { inDe.value = U.hojeLocalBR(); inAte.value = U.hojeLocalBR(); }
+        sincronizarUI();
+        onChange();
+      };
+    });
+    inData.addEventListener('change', onChange);
+    inDe.addEventListener('change', onChange);
+    inAte.addEventListener('change', onChange);
+    sincronizarUI();
+
+    /* compara uma data-calendário já extraída (YYYY-MM-DD, horário de Brasília)
+       contra o modo atual do filtro */
+    function comparar(dl) {
+      if (modo === 'todos') return true;
+      if (!dl) return false; // sem criadoEm válido -> não aparece em filtros específicos
+      if (modo === 'hoje') return dl === U.hojeLocalBR();
+      if (modo === 'ontem') return dl === U.diasAtrasLocalBR(1);
+      if (modo === 'anteontem') return dl === U.diasAtrasLocalBR(2);
+      if (modo === 'data') return !!inData.value && dl === inData.value;
+      if (modo === 'periodo') {
+        if (inDe.value && dl < inDe.value) return false;
+        if (inAte.value && dl > inAte.value) return false;
+        return true;
+      }
+      return true;
+    }
+
+    function atualizarContador(qtd) {
+      const plural = qtd === 1 ? 'lead' : 'leads';
+      let txt;
+      if (modo === 'todos') txt = '📋 ' + qtd + ' ' + plural;
+      else if (modo === 'hoje') txt = '📅 ' + qtd + ' ' + plural + ' cadastrados hoje';
+      else if (modo === 'ontem') txt = '📅 ' + qtd + ' ' + plural + ' cadastrados ontem';
+      else if (modo === 'anteontem') txt = '📅 ' + qtd + ' ' + plural + ' cadastrados anteontem';
+      else if (modo === 'data') txt = '📅 ' + qtd + ' ' + plural + ' cadastrados em ' + (inData.value ? U.fmtDate(inData.value) : '—');
+      else txt = '📅 ' + qtd + ' ' + plural + ' cadastrados entre ' + (inDe.value ? U.fmtDate(inDe.value) : '—') + ' e ' + (inAte.value ? U.fmtDate(inAte.value) : '—');
+      contador.textContent = txt;
+    }
+
+    return {
+      el: wrap,
+      passa: function (l) { return comparar(U.dataLocalBR(l && l.criadoEm)); },
+      passaDataStr: comparar,
+      atualizarContador: atualizarContador
+    };
+  }
+
   /* ================= VIEW: FUNIL ================= */
   Views.funil = function (container) {
     const head = U.el('<div class="page-head"><h1 class="page-title">Funil de Leads</h1></div>');
@@ -1040,6 +1132,8 @@
       '</div>');
     container.appendChild(bar);
     const buscaInput = bar.querySelector('#f-funil-busca');
+    const filtroData = criarFiltroDataCadastro(function () { aplicarFiltrosFunil(); });
+    container.appendChild(filtroData.el);
 
     const leads = scopedLeads();
     const admin = Auth.isAdmin();
@@ -1064,6 +1158,7 @@
       arr.forEach(function (l) {
         const card = leadCard(l);
         card.dataset.nome = normalizarBusca(l.nome);
+        card.dataset.criado = U.dataLocalBR(l.criadoEm);
         list.appendChild(card);
       });
     }
@@ -1164,22 +1259,31 @@
     board.addEventListener('scroll', function () { kanbanScrollX = board.scrollLeft; });
     container.appendChild(U.el('<div class="muted">Arraste os cartões entre as colunas para mudar a etapa. No celular, abra o cartão e use "Mover etapa".</div>'));
 
-    /* pesquisa em tempo real: só mostra/esconde cards já renderizados (não refaz colunas,
-       não mexe em etapa/drag-and-drop/ordenação) e atualiza a contagem visível de cada coluna */
-    function filtrarPorNome() {
+    /* pesquisa + data de cadastro, em tempo real: só mostra/esconde cards já
+       renderizados (não refaz colunas, não mexe em etapa/drag-and-drop/
+       ordenação, não altera nenhum dado do lead) e atualiza a contagem
+       visível de cada coluna + o contador geral do filtro de data. Lógica E
+       entre busca por nome e data de cadastro. */
+    function aplicarFiltrosFunil() {
       const termo = normalizarBusca(buscaInput.value.trim());
+      let totalVisiveis = 0;
       board.querySelectorAll('.kanban-col').forEach(function (col) {
         let visiveis = 0;
         col.querySelectorAll('.lead-card').forEach(function (card) {
-          const ok = !termo || (card.dataset.nome || '').indexOf(termo) >= 0;
+          const okNome = !termo || (card.dataset.nome || '').indexOf(termo) >= 0;
+          const okData = filtroData.passaDataStr(card.dataset.criado || '');
+          const ok = okNome && okData;
           card.style.display = ok ? '' : 'none';
           if (ok) visiveis++;
         });
         col.querySelector('.cnt').textContent = visiveis + (visiveis === 1 ? ' lead' : ' leads');
+        totalVisiveis += visiveis;
       });
+      filtroData.atualizarContador(totalVisiveis);
     }
-    buscaInput.addEventListener('keyup', filtrarPorNome);
-    buscaInput.addEventListener('change', filtrarPorNome);
+    buscaInput.addEventListener('keyup', aplicarFiltrosFunil);
+    buscaInput.addEventListener('change', aplicarFiltrosFunil);
+    aplicarFiltrosFunil();
   };
 
   /* ================= VIEW: LEADS (lista) ================= */
@@ -1207,6 +1311,8 @@
       '<input id="f-de" type="date" title="Entrada de"><input id="f-ate" type="date" title="Entrada até">' +
       '</div>');
     container.appendChild(f);
+    const filtroData = criarFiltroDataCadastro(function () { draw(); });
+    container.appendChild(filtroData.el);
     const tableWrap = U.el('<div class="card table-wrap"></div>');
     container.appendChild(tableWrap);
 
@@ -1240,6 +1346,7 @@
         const d = (l.criadoEm || '').slice(0, 10);
         if (fde && d < fde) return false;
         if (fate && d > fate) return false;
+        if (!filtroData.passa(l)) return false;
         if (fs) {
           const s = statusLead(l);
           if (fs === 'perdido' && s.label !== 'Não realizado') return false;
@@ -1267,6 +1374,7 @@
       tableWrap.querySelectorAll('tr[data-id]').forEach(function (tr) {
         tr.onclick = function () { openLeadModal(tr.dataset.id); };
       });
+      filtroData.atualizarContador(rows.length);
     }
     f.querySelectorAll('select,input').forEach(function (e) { e.addEventListener('change', draw); e.addEventListener('keyup', draw); });
     draw();

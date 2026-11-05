@@ -18,6 +18,19 @@ window.U = (function () {
     return new Date(p[0], p[1] - 1, p[2]);
   }
   function fmtDate(s) { const d = dateFromISO(s); return d ? d.toLocaleDateString('pt-BR') : '—'; }
+
+  /* Data-calendário (YYYY-MM-DD) de um timestamp ISO completo, no horário de
+     Brasília — via Intl, nunca por slice() do texto (um lead gravado às 22h
+     local pode estar em "amanhã" em UTC). Usado só pelo filtro de "data de
+     cadastro" dos leads (lead.criadoEm); não substitui dateFromISO/fmtDate. */
+  function dataLocalBR(isoCompleto) {
+    if (!isoCompleto) return '';
+    const d = new Date(isoCompleto);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  }
+  function hojeLocalBR() { return dataLocalBR(new Date()); }
+  function diasAtrasLocalBR(n) { return dataLocalBR(new Date(Date.now() - n * DAY)); }
   function fmtDateTime(s) {
     if (!s) return '—';
     const d = new Date(s);
@@ -175,6 +188,7 @@ window.U = (function () {
   return {
     DAY: DAY, uid: uid, nowISO: nowISO, todayISO: todayISO, iso: iso, dateFromISO: dateFromISO,
     fmtDate: fmtDate, fmtDateTime: fmtDateTime, brl: brl, brlShort: brlShort, parseNumber: parseNumber,
+    dataLocalBR: dataLocalBR, hojeLocalBR: hojeLocalBR, diasAtrasLocalBR: diasAtrasLocalBR,
     maskMoneyInput: maskMoneyInput, moneyInputValue: moneyInputValue,
     onlyDigits: onlyDigits, fmtPhone: fmtPhone, waLink: waLink, telLink: telLink,
     daysBetween: daysBetween, addDays: addDays, clamp: clamp, pct: pct, el: el, esc: esc,
