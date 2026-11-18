@@ -229,7 +229,24 @@
         return true;
       }).sort(function (a, b) { return (b.dataVenda || '') < (a.dataVenda || '') ? -1 : 1; });
 
-      const total = rows.reduce(function (s, v) { return s + (Number(v.valorCredito) || 0); }, 0);
+      /* Total de créditos = indicador de VENDAS DO FUNIL (REGRA OFICIAL, igual
+         à de Store.computeMeta()): só entram vendas com leadId cujo lead
+         esteja ATUALMENTE em "boleto_e_assinatura", usando lead.valorCredito
+         (valor oficial) — nunca v.valorCredito, que fica desatualizado se o
+         lead já saiu de Boleto. Cada lead conta uma única vez. Vendas
+         standalone (sem leadId) ficam DE FORA deste total — continuam
+         existindo, visíveis na listagem abaixo e funcionando normalmente no
+         resto do sistema, só não entram neste indicador do funil. A listagem
+         (linhas da tabela) não muda — registros antigos continuam visíveis. */
+      const leadsJaContados = {};
+      const total = rows.reduce(function (s, v) {
+        if (!v.leadId) return s; // standalone: fora do indicador de vendas do funil
+        if (leadsJaContados[v.leadId]) return s;
+        leadsJaContados[v.leadId] = true;
+        const lead = Store.get('leads', v.leadId);
+        if (!lead || lead.etapa !== 'boleto_e_assinatura') return s;
+        return s + (Number(lead.valorCredito) || 0);
+      }, 0);
 
       wrap.innerHTML = '<table class="table"><thead><tr><th>Data</th><th>Cliente</th><th>Telefone</th><th>Consultor</th>' +
         '<th>Administradora</th><th class="num">Crédito</th><th class="num">Parcela</th><th>Cota</th><th>Origem</th><th>Indicado por</th><th></th></tr></thead><tbody>' +

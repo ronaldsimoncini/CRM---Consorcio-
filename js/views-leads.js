@@ -1113,6 +1113,38 @@
     };
   }
 
+  /* Comparação estável por nome (pt-BR), usada como critério secundário e
+     como ordenação padrão de todas as colunas (igual ao comportamento atual). */
+  function compararNome(a, b) { return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }); }
+
+  /* "YYYY-MM-DD HH:MM" da reunião agendada do lead (mesmos campos já gravados
+     por H.reuniaoForm: lead.reuniao.data + lead.reuniao.hora, horário local,
+     sem conversão de fuso) — ou null se o lead não tem data de reunião. */
+  function chaveReuniao(l) {
+    const r = l.reuniao;
+    if (!r || !r.data) return null;
+    return r.data + ' ' + (r.hora || '00:00');
+  }
+
+  /* Ordenação ESPECÍFICA da coluna "Reunião agendada" (ALTERAÇÃO 1):
+     1) futuras primeiro, mais próxima primeiro; 2) depois as passadas, mais
+     recente primeiro; 3) empate de data/hora -> nome (estável); 4) sem data
+     de reunião -> sempre no final, entre si por nome. Não afeta nenhuma
+     outra coluna (só é chamada para a etapa 'reuniao_agendada', ver
+     preencherColuna) nem altera etapa/histórico/dados do lead — é só a
+     ordem de exibição dos cartões já carregados. */
+  function ordenarReuniaoAgendada(arr) {
+    const agora = U.agoraLocalBR();
+    const comData = [], semData = [];
+    arr.forEach(function (l) { (chaveReuniao(l) ? comData : semData).push(l); });
+    const futuras = comData.filter(function (l) { return chaveReuniao(l) >= agora; })
+      .sort(function (a, b) { const ca = chaveReuniao(a), cb = chaveReuniao(b); return ca !== cb ? (ca < cb ? -1 : 1) : compararNome(a, b); });
+    const passadas = comData.filter(function (l) { return chaveReuniao(l) < agora; })
+      .sort(function (a, b) { const ca = chaveReuniao(a), cb = chaveReuniao(b); return ca !== cb ? (ca < cb ? 1 : -1) : compararNome(a, b); });
+    semData.sort(compararNome);
+    return futuras.concat(passadas, semData);
+  }
+
   /* ================= VIEW: FUNIL ================= */
   Views.funil = function (container) {
     const head = U.el('<div class="page-head"><h1 class="page-title">Funil de Leads</h1></div>');
@@ -1129,9 +1161,11 @@
     }
 
     const bar = U.el('<div class="filters"><input id="f-funil-busca" placeholder="Pesquisar cliente...">' +
+      '<select id="f-funil-cons"><option value="">Corretor: todos</option>' + C.opts(C.usuariosConsultores(), '') + '</select>' +
       '</div>');
     container.appendChild(bar);
     const buscaInput = bar.querySelector('#f-funil-busca');
+    const consInput = bar.querySelector('#f-funil-cons');
     const filtroData = criarFiltroDataCadastro(function () { aplicarFiltrosFunil(); });
     container.appendChild(filtroData.el);
 
@@ -1148,7 +1182,7 @@
 
     function preencherColuna(col, arr) {
       const list = col.querySelector('.kanban-list');
-      arr.sort(function (a, b) { return String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }); });
+      arr = col.dataset.etapa === 'reuniao_agendada' ? ordenarReuniaoAgendada(arr) : arr.sort(compararNome);
       let cntTxt = arr.length + (arr.length === 1 ? ' lead' : ' leads');
       if (col.dataset.etapa === ETAPA_COM_TOTAL) {
         const total = arr.reduce(function (s, l) { return s + (Number(l.valorCredito) || 0); }, 0);
@@ -1159,6 +1193,7 @@
         const card = leadCard(l);
         card.dataset.nome = normalizarBusca(l.nome);
         card.dataset.criado = U.dataLocalBR(l.criadoEm);
+        card.dataset.consultor = l.consultorId || '';
         list.appendChild(card);
       });
     }
@@ -1259,20 +1294,22 @@
     board.addEventListener('scroll', function () { kanbanScrollX = board.scrollLeft; });
     container.appendChild(U.el('<div class="muted">Arraste os cartões entre as colunas para mudar a etapa. No celular, abra o cartão e use "Mover etapa".</div>'));
 
-    /* pesquisa + data de cadastro, em tempo real: só mostra/esconde cards já
-       renderizados (não refaz colunas, não mexe em etapa/drag-and-drop/
-       ordenação, não altera nenhum dado do lead) e atualiza a contagem
+    /* pesquisa + data de cadastro + corretor, em tempo real: só mostra/esconde
+       cards já renderizados (não refaz colunas, não mexe em etapa/drag-and-
+       drop/ordenação, não altera nenhum dado do lead) e atualiza a contagem
        visível de cada coluna + o contador geral do filtro de data. Lógica E
-       entre busca por nome e data de cadastro. */
+       entre busca por nome, data de cadastro e corretor. */
     function aplicarFiltrosFunil() {
       const termo = normalizarBusca(buscaInput.value.trim());
+      const cons = consInput.value;
       let totalVisiveis = 0;
       board.querySelectorAll('.kanban-col').forEach(function (col) {
         let visiveis = 0;
         col.querySelectorAll('.lead-card').forEach(function (card) {
           const okNome = !termo || (card.dataset.nome || '').indexOf(termo) >= 0;
           const okData = filtroData.passaDataStr(card.dataset.criado || '');
-          const ok = okNome && okData;
+          const okCons = !cons || card.dataset.consultor === cons;
+          const ok = okNome && okData && okCons;
           card.style.display = ok ? '' : 'none';
           if (ok) visiveis++;
         });
@@ -1283,8 +1320,70 @@
     }
     buscaInput.addEventListener('keyup', aplicarFiltrosFunil);
     buscaInput.addEventListener('change', aplicarFiltrosFunil);
+    consInput.addEventListener('change', aplicarFiltrosFunil);
     aplicarFiltrosFunil();
   };
+
+  /* Exportação de TODOS os leads para .xlsx — SOMENTE LEITURA (nenhuma
+     chamada a Store.insert/update/remove; apenas Store.all()/Store.etapaLabel(),
+     as mesmas funções de leitura que o resto do app já usa). Ignora
+     deliberadamente qualquer filtro/busca/ordenação ativo na tela — sempre a
+     base completa. Reaproveita o XLSX (SheetJS) já carregado pelo index.html
+     para o Relatório Comercial; não adiciona nenhuma biblioteca nova.
+     Restrita a administradores (ver botão em Views.leads). */
+  function exportarLeadsXLSX() {
+    if (!Auth.isAdmin()) { C.toast('Apenas administradores podem exportar a base completa de leads.'); return; }
+
+    const leads = Store.all('leads');
+    const usuarios = Store.all('usuarios');
+    function nomeVendedor(id) {
+      if (!id) return '';
+      const u = usuarios.find(function (x) { return x.id === id; });
+      return u ? (u.nome || '') : '';
+    }
+
+    /* validação antes de gerar o arquivo */
+    const totalLeads = leads.length;
+    const ids = leads.map(function (l) { return l.id; });
+    const idsDuplicados = ids.filter(function (id, i) { return ids.indexOf(id) !== i; });
+    let comVendedor = 0, comCampoVazio = 0;
+    const linhas = leads.map(function (l) {
+      const vend = nomeVendedor(l.consultorId);
+      if (vend) comVendedor++;
+      const row = {
+        'Nome': l.nome || '',
+        'Telefone': l.telefone || '',
+        'Vendedor': vend,
+        'Etapa do lead': Store.etapaLabel(l.etapa) || '',
+        'Origem do lead': l.origem || '',
+        'Segmento': '' // não existe campo de segmento no modelo de dados do CRM -- deixado vazio, nunca inventado
+      };
+      if (!row['Nome'] || !row['Telefone'] || !row['Vendedor'] || !row['Etapa do lead'] || !row['Origem do lead']) comCampoVazio++;
+      return row;
+    });
+    const semVendedor = totalLeads - comVendedor;
+    if (idsDuplicados.length) console.warn('[Exportar Leads] IDs duplicados encontrados em Store.all("leads"):', idsDuplicados);
+
+    const msg = 'Serão exportados ' + linhas.length + ' leads' +
+      (linhas.length !== totalLeads ? ' (atenção: total no CRM é ' + totalLeads + ')' : '') + '.\n' +
+      semVendedor + ' sem vendedor, ' + comCampoVazio + ' com algum campo vazio' +
+      (idsDuplicados.length ? ', ' + idsDuplicados.length + ' IDs duplicados' : '') + '.\n\nDeseja continuar?';
+    if (!window.confirm(msg)) return;
+
+    const ws = XLSX.utils.json_to_sheet(linhas, { header: ['Nome', 'Telefone', 'Vendedor', 'Etapa do lead', 'Origem do lead', 'Segmento'] });
+    /* telefone sempre como texto, para não perder zeros/formatação */
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+    for (let R = range.s.r + 1; R <= range.e.r; R++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: R, c: 1 })];
+      if (cell) cell.t = 's';
+    }
+    ws['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 22 }, { wch: 22 }, { wch: 18 }, { wch: 16 }];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'FUNIL LP');
+    XLSX.writeFile(wb, 'leads-crm-lft-' + U.todayISO() + '.xlsx');
+    C.toast('Exportação concluída: ' + linhas.length + ' leads.');
+  }
 
   /* ================= VIEW: LEADS (lista) ================= */
   Views.leads = function (container) {
@@ -1293,6 +1392,12 @@
       const add = U.el('<button class="btn primary">+ NOVO LEAD</button>');
       add.onclick = function () { novoLeadForm(); };
       head.appendChild(add);
+    }
+    /* Exportação para Excel: só admin (base completa, sem nenhum filtro). */
+    if (Auth.isAdmin()) {
+      const exportBtn = U.el('<button class="btn ghost">📥 Exportar Leads</button>');
+      exportBtn.onclick = function () { exportarLeadsXLSX(); };
+      head.appendChild(exportBtn);
     }
     container.appendChild(head);
 

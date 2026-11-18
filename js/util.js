@@ -31,6 +31,18 @@ window.U = (function () {
   }
   function hojeLocalBR() { return dataLocalBR(new Date()); }
   function diasAtrasLocalBR(n) { return dataLocalBR(new Date(Date.now() - n * DAY)); }
+
+  /* "Agora" no horário de Brasília, no formato "YYYY-MM-DD HH:MM" — mesmo
+     formato de lead.reuniao.data + ' ' + lead.reuniao.hora, para comparar
+     diretamente por string (ambos já são horário local, sem conversão de
+     fuso: a reunião é digitada pelo usuário em campos <input date/time>).
+     Usado só pela ordenação da coluna "Reunião agendada" do Funil. */
+  function agoraLocalBR() {
+    const d = new Date();
+    const dataPart = d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    const horaPart = d.toLocaleTimeString('en-GB', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+    return dataPart + ' ' + horaPart;
+  }
   function fmtDateTime(s) {
     if (!s) return '—';
     const d = new Date(s);
@@ -188,7 +200,7 @@ window.U = (function () {
   return {
     DAY: DAY, uid: uid, nowISO: nowISO, todayISO: todayISO, iso: iso, dateFromISO: dateFromISO,
     fmtDate: fmtDate, fmtDateTime: fmtDateTime, brl: brl, brlShort: brlShort, parseNumber: parseNumber,
-    dataLocalBR: dataLocalBR, hojeLocalBR: hojeLocalBR, diasAtrasLocalBR: diasAtrasLocalBR,
+    dataLocalBR: dataLocalBR, hojeLocalBR: hojeLocalBR, diasAtrasLocalBR: diasAtrasLocalBR, agoraLocalBR: agoraLocalBR,
     maskMoneyInput: maskMoneyInput, moneyInputValue: moneyInputValue,
     onlyDigits: onlyDigits, fmtPhone: fmtPhone, waLink: waLink, telLink: telLink,
     daysBetween: daysBetween, addDays: addDays, clamp: clamp, pct: pct, el: el, esc: esc,
