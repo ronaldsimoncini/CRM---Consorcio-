@@ -1330,9 +1330,10 @@
      deliberadamente qualquer filtro/busca/ordenação ativo na tela — sempre a
      base completa. Reaproveita o XLSX (SheetJS) já carregado pelo index.html
      para o Relatório Comercial; não adiciona nenhuma biblioteca nova.
-     Restrita a administradores (ver botão em Views.leads). */
+     Disponível para qualquer usuário autenticado (ver botão em Views.leads) —
+     mesmo mecanismo de autenticação do CRM (Auth.user()), sem regra nova. */
   function exportarLeadsXLSX() {
-    if (!Auth.isAdmin()) { C.toast('Apenas administradores podem exportar a base completa de leads.'); return; }
+    if (!Auth.user()) { C.toast('Faça login para exportar os leads.'); return; }
 
     const leads = Store.all('leads');
     const usuarios = Store.all('usuarios');
@@ -1352,13 +1353,13 @@
       if (vend) comVendedor++;
       const row = {
         'Nome': l.nome || '',
-        'Telefone': l.telefone || '',
+        'WhatsApp': l.whatsapp || '', // campo real de WhatsApp do lead (ver leadFormBody/H.boletoForm); distinto de l.telefone
         'Vendedor': vend,
         'Etapa do lead': Store.etapaLabel(l.etapa) || '',
         'Origem do lead': l.origem || '',
         'Segmento': '' // não existe campo de segmento no modelo de dados do CRM -- deixado vazio, nunca inventado
       };
-      if (!row['Nome'] || !row['Telefone'] || !row['Vendedor'] || !row['Etapa do lead'] || !row['Origem do lead']) comCampoVazio++;
+      if (!row['Nome'] || !row['WhatsApp'] || !row['Vendedor'] || !row['Etapa do lead'] || !row['Origem do lead']) comCampoVazio++;
       return row;
     });
     const semVendedor = totalLeads - comVendedor;
@@ -1370,8 +1371,8 @@
       (idsDuplicados.length ? ', ' + idsDuplicados.length + ' IDs duplicados' : '') + '.\n\nDeseja continuar?';
     if (!window.confirm(msg)) return;
 
-    const ws = XLSX.utils.json_to_sheet(linhas, { header: ['Nome', 'Telefone', 'Vendedor', 'Etapa do lead', 'Origem do lead', 'Segmento'] });
-    /* telefone sempre como texto, para não perder zeros/formatação */
+    const ws = XLSX.utils.json_to_sheet(linhas, { header: ['Nome', 'WhatsApp', 'Vendedor', 'Etapa do lead', 'Origem do lead', 'Segmento'] });
+    /* WhatsApp sempre como texto, para não perder zeros/formatação */
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
     for (let R = range.s.r + 1; R <= range.e.r; R++) {
       const cell = ws[XLSX.utils.encode_cell({ r: R, c: 1 })];
@@ -1393,8 +1394,8 @@
       add.onclick = function () { novoLeadForm(); };
       head.appendChild(add);
     }
-    /* Exportação para Excel: só admin (base completa, sem nenhum filtro). */
-    if (Auth.isAdmin()) {
+    /* Exportação para Excel: qualquer usuário autenticado (base completa, sem nenhum filtro). */
+    if (Auth.user()) {
       const exportBtn = U.el('<button class="btn ghost">📥 Exportar Leads</button>');
       exportBtn.onclick = function () { exportarLeadsXLSX(); };
       head.appendChild(exportBtn);
