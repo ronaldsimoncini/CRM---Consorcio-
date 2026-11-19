@@ -1324,24 +1324,35 @@
     aplicarFiltrosFunil();
   };
 
-  /* Exportação de TODOS os leads para .xlsx — SOMENTE LEITURA (nenhuma
-     chamada a Store.insert/update/remove; apenas Store.all()/Store.etapaLabel(),
-     as mesmas funções de leitura que o resto do app já usa). Ignora
+  /* Exportação de leads para .xlsx — SOMENTE LEITURA (nenhuma chamada a
+     Store.insert/update/remove; apenas Store.all()/Store.etapaLabel(), as
+     mesmas funções de leitura que o resto do app já usa). Ignora
      deliberadamente qualquer filtro/busca/ordenação ativo na tela — sempre a
-     base completa. Reaproveita o XLSX (SheetJS) já carregado pelo index.html
-     para o Relatório Comercial; não adiciona nenhuma biblioteca nova.
-     Disponível para qualquer usuário autenticado (ver botão em Views.leads) —
-     mesmo mecanismo de autenticação do CRM (Auth.user()), sem regra nova. */
-  function exportarLeadsXLSX() {
-    if (!Auth.user()) { C.toast('Faça login para exportar os leads.'); return; }
+     base completa do usuário. Reaproveita o XLSX (SheetJS) já carregado pelo
+     index.html para o Relatório Comercial; não adiciona nenhuma biblioteca
+     nova. Disponível para qualquer usuário autenticado (ver botão em
+     Views.leads) — mesmo mecanismo de autenticação do CRM (Auth.user()),
+     sem regra nova.
 
-    const leads = Store.all('leads');
+     Conjunto exportado (REGRA OFICIAL, igual à de Auth.scope()): admin ->
+     TODOS os leads; demais usuários (consultor/gestor) -> só os leads cujo
+     lead.consultorId seja o do usuário logado (Auth.currentId()/Auth.user().id,
+     nunca por nome). Nenhum outro dado/regra do CRM é afetado — é só o
+     recorte usado por esta exportação. */
+  function exportarLeadsXLSX() {
+    const usuarioLogado = Auth.user();
+    if (!usuarioLogado) { C.toast('Faça login para exportar os leads.'); return; }
+
+    const todosLeads = Store.all('leads');
+    const leads = Auth.isAdmin() ? todosLeads : todosLeads.filter(function (l) { return l.consultorId === usuarioLogado.id; });
     const usuarios = Store.all('usuarios');
     function nomeVendedor(id) {
       if (!id) return '';
       const u = usuarios.find(function (x) { return x.id === id; });
       return u ? (u.nome || '') : '';
     }
+
+    if (!leads.length) { C.toast('Não há leads vinculados a você para exportar.'); return; }
 
     /* validação antes de gerar o arquivo */
     const totalLeads = leads.length;
